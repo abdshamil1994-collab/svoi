@@ -1,30 +1,30 @@
-// This is a basic Flutter widget test.
-//
-// To perform an interaction with a widget in your test, use the WidgetTester
-// utility in the flutter_test package. For example, you can send tap and scroll
-// gestures. You can also use WidgetTester to find child widgets in the widget
-// tree, read text, and verify that the values of widget properties are correct.
-
 import 'package:flutter_test/flutter_test.dart';
-import 'package:material_ui/material_ui.dart';
+import 'package:material_ui/material_ui.dart' show Size;
 
 import 'package:svoi/main.dart';
 
 void main() {
-  testWidgets('Counter increments smoke test', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
-    await tester.pumpWidget(const MyApp());
+  testWidgets('Login screen renders and validates empty fields',
+      (WidgetTester tester) async {
+    tester.view.physicalSize = const Size(1080, 2400);
+    tester.view.devicePixelRatio = 2.0;
+    addTearDown(tester.view.reset);
 
-    // Verify that our counter starts at 0.
-    expect(find.text('0'), findsOneWidget);
-    expect(find.text('1'), findsNothing);
+    await tester.pumpWidget(const SvoiApp());
 
-    // Tap the '+' icon and trigger a frame.
-    await tester.tap(find.byIcon(Icons.add));
+    expect(find.text('SVOI'), findsOneWidget);
+    expect(find.text('Email или телефон'), findsOneWidget);
+    expect(find.text('Пароль'), findsOneWidget);
+    expect(find.text('Войти'), findsOneWidget);
+    expect(find.text('Забыли пароль?'), findsOneWidget);
+    expect(find.text('или'), findsOneWidget);
+    expect(find.text('Создать аккаунт'), findsOneWidget);
+    expect(find.text('Политика конфиденциальности'), findsOneWidget);
+
+    await tester.tap(find.text('Войти'));
     await tester.pump();
 
-    // Verify that our counter has incremented.
-    expect(find.text('0'), findsNothing);
-    expect(find.text('1'), findsOneWidget);
+    expect(find.text('Введите email или телефон'), findsOneWidget);
+    expect(find.text('Введите пароль'), findsOneWidget);
   });
 }
