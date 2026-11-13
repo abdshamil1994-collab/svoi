@@ -3,6 +3,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'app_theme.dart';
 import 'feed_screen.dart' show timeAgo;
+import 'notifications.dart';
 import 'user_profile_screen.dart';
 
 class CommentsScreen extends StatefulWidget {
@@ -20,6 +21,7 @@ class _CommentsScreenState extends State<CommentsScreen> {
   bool _loadFailed = false;
   bool _sending = false;
   Map<String, dynamic>? _myProfile;
+  String? _postOwnerId;
 
   SupabaseClient get _client => Supabase.instance.client;
 
@@ -28,6 +30,18 @@ class _CommentsScreenState extends State<CommentsScreen> {
     super.initState();
     _load();
     _loadMyProfile();
+    _loadPostOwner();
+  }
+
+  Future<void> _loadPostOwner() async {
+    try {
+      final row = await _client
+          .from('posts')
+          .select('user_id')
+          .eq('id', widget.postId)
+          .maybeSingle();
+      if (mounted) setState(() => _postOwnerId = row?['user_id'] as String?);
+    } catch (_) {}
   }
 
   Future<void> _loadMyProfile() async {
@@ -90,6 +104,10 @@ class _CommentsScreenState extends State<CommentsScreen> {
         'user_id': _client.auth.currentUser!.id,
         'text': text,
       });
+      final owner = _postOwnerId;
+      if (owner != null) {
+        sendNotification(userId: owner, type: 'comment', postId: widget.postId);
+      }
     } catch (_) {
       if (mounted) {
         setState(() => _sending = false);

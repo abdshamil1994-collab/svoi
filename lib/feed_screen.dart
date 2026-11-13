@@ -4,6 +4,9 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'app_theme.dart';
 import 'comments_screen.dart';
 import 'create_post_screen.dart';
+import 'edit_post_screen.dart';
+import 'notifications.dart';
+import 'notifications_screen.dart';
 import 'stories_bar.dart';
 import 'user_profile_screen.dart';
 import 'video_player_screen.dart';
@@ -31,6 +34,7 @@ class _FeedScreenState extends State<FeedScreen> {
   bool _loadFailed = false;
   bool _friendsFailed = false;
   Set<String> _myLikes = {};
+  int _unreadNotifications = 0;
 
   SupabaseClient get _client => Supabase.instance.client;
 
@@ -39,6 +43,26 @@ class _FeedScreenState extends State<FeedScreen> {
     super.initState();
     _load();
     _loadFriendsFeed();
+    _loadUnread();
+  }
+
+  Future<void> _loadUnread() async {
+    try {
+      final res = await _client
+          .from('notifications')
+          .select('id')
+          .eq('user_id', _client.auth.currentUser!.id)
+          .eq('read', false)
+          .count(CountOption.exact);
+      if (mounted) setState(() => _unreadNotifications = res.count);
+    } catch (_) {}
+  }
+
+  Future<void> _openNotifications() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const NotificationsScreen()),
+    );
+    _loadUnread();
   }
 
   Future<void> _load() async {
@@ -194,6 +218,17 @@ class _FeedScreenState extends State<FeedScreen> {
           centerTitle: true,
           backgroundColor: theme.scaffoldBackgroundColor,
           elevation: 0,
+          actions: [
+            IconButton(
+              onPressed: _openNotifications,
+              icon: Badge(
+                isLabelVisible: _unreadNotifications > 0,
+                label: Text('$_unreadNotifications'),
+                backgroundColor: AppColors.coral,
+                child: const Icon(Icons.notifications_outlined),
+              ),
+            ),
+          ],
         ),
         body: Column(
           children: [
@@ -288,6 +323,13 @@ class _FeedScreenState extends State<FeedScreen> {
             likesCount: _countOf(post, 'likes'),
             commentsCount: _countOf(post, 'comments'),
             liked: _myLikes.contains(post['id']),
+            onChanged: _refreshQuietly,
+            onDeleted: (deleted) {
+              setState(() {
+                _posts?.removeWhere((p) => p['id'] == deleted['id']);
+                _friendPosts?.removeWhere((p) => p['id'] == deleted['id']);
+              });
+            },
           );
         },
       ),
@@ -302,12 +344,16 @@ class PostCard extends StatefulWidget {
     required this.likesCount,
     required this.commentsCount,
     required this.liked,
+    this.onChanged,
+    this.onDeleted,
   });
 
   final Map<String, dynamic> post;
   final int likesCount;
   final int commentsCount;
   final bool liked;
+  final VoidCallback? onChanged;
+  final ValueChanged<Map<String, dynamic>>? onDeleted;
 
   @override
   State<PostCard> createState() => _PostCardState();
@@ -333,6 +379,11 @@ class _PostCardState extends State<PostCard> {
     try {
       if (_liked) {
         await _client.from('likes').insert({'post_id': postId, 'user_id': uid});
+        sendNotification(
+          userId: widget.post['user_id'] as String? ?? '',
+          type: 'like',
+          postId: postId,
+        );
       } else {
         await _client
             .from('likes')
@@ -370,6 +421,48 @@ class _PostCardState extends State<PostCard> {
     );
   }
 
+  Future<void> _editPost() async {
+    final saved = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(builder: (_) => EditPostScreen(post: widget.post)),
+    );
+    if (saved == true) widget.onChanged?.call();
+  }
+
+  Future<void> _deletePost() async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Удалить пост?'),
+        content: const Text('Действие нельзя отменить'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Отмена'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child:
+                const Text('Удалить', style: TextStyle(color: AppColors.error)),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+    try {
+      await _client
+          .from('posts')
+          .delete()
+          .eq('id', widget.post['id'] as String);
+      widget.onDeleted?.call(widget.post);
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Не удалось удалить пост')),
+        );
+      }
+    }
+  }
+
   void _openAuthor() {
     final authorId = widget.post['user_id'] as String?;
     if (authorId == null) return;
@@ -398,6 +491,8 @@ class _PostCardState extends State<PostCard> {
 
     final mutedColor =
         theme.textTheme.bodyMedium?.color?.withValues(alpha: 0.5);
+    final isMyPost = widget.post['user_id'] ==
+        Supabase.instance.client.auth.currentUser?.id;
 
     return Container(
       decoration: BoxDecoration(
@@ -443,6 +538,19 @@ class _PostCardState extends State<PostCard> {
                     ],
                   ),
                 ),
+                if (isMyPost)
+                  PopupMenuButton<String>(
+                    icon: Icon(Icons.more_horiz, color: mutedColor),
+                    onSelected: (value) {
+                      if (value == 'edit') _editPost();
+                      if (value == 'delete') _deletePost();
+                    },
+                    itemBuilder: (context) => const [
+                      PopupMenuItem(
+                          value: 'edit', child: Text('Редактировать')),
+                      PopupMenuItem(value: 'delete', child: Text('Удалить')),
+                    ],
+                  ),
               ],
             ),
           ),

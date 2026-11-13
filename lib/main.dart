@@ -1,3 +1,4 @@
+import 'package:flutter_native_splash/flutter_native_splash.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -8,13 +9,25 @@ import 'settings.dart';
 import 'supabase_config.dart';
 
 Future<void> main() async {
-  WidgetsFlutterBinding.ensureInitialized();
+  final binding = WidgetsFlutterBinding.ensureInitialized();
+  FlutterNativeSplash.preserve(widgetsBinding: binding);
+
+  final startedAt = DateTime.now();
   await Supabase.initialize(
     url: SupabaseConfig.url,
     publishableKey: SupabaseConfig.publishableKey,
   );
   await AppSettings.load();
+
+  // Splash — минимум 2 секунды или до готовности.
+  final elapsed = DateTime.now().difference(startedAt);
+  const minDuration = Duration(seconds: 2);
+  if (elapsed < minDuration) {
+    await Future.delayed(minDuration - elapsed);
+  }
+
   runApp(const SvoiApp());
+  FlutterNativeSplash.remove();
 }
 
 class SvoiApp extends StatelessWidget {

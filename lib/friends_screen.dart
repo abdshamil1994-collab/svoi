@@ -2,6 +2,7 @@ import 'package:material_ui/material_ui.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'app_theme.dart';
+import 'notifications.dart';
 import 'user_profile_screen.dart';
 
 class FriendsScreen extends StatefulWidget {
@@ -109,6 +110,8 @@ class _FriendsScreenState extends State<FriendsScreen> {
   }
 
   Future<void> _addFriend(String friendId) async {
+    // Оптимистично показываем «Заявка отправлена», запрос — в фоне.
+    setState(() => _pendingOut.add(friendId));
     try {
       // Взаимная заявка? Тогда сразу принимаем.
       final reverse = await _client
@@ -122,14 +125,17 @@ class _FriendsScreenState extends State<FriendsScreen> {
         await _client
             .from('friendships')
             .update({'status': 'accepted'}).eq('id', reverse['id']);
+        sendNotification(userId: friendId, type: 'friend_accept');
       } else {
         await _client
             .from('friendships')
             .insert({'user_id': _uid, 'friend_id': friendId});
+        sendNotification(userId: friendId, type: 'friend_request');
       }
       _loadData();
     } catch (_) {
       if (mounted) {
+        setState(() => _pendingOut.remove(friendId));
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Не удалось отправить заявку')),
         );

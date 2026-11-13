@@ -2,6 +2,8 @@ import 'package:material_ui/material_ui.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'app_theme.dart';
+import 'chat_screen.dart';
+import 'notifications.dart';
 import 'post_grid.dart';
 
 class UserProfileScreen extends StatefulWidget {
@@ -101,23 +103,37 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
   }
 
   Future<void> _friendAction() async {
-    try {
-      if (_friendState == 'none') {
+    if (_friendState == 'none') {
+      // Оптимистично: сразу «Заявка отправлена», запрос в фоне.
+      setState(() => _friendState = 'pending_out');
+      try {
         await _client.from('friendships').insert(
             {'user_id': _uid, 'friend_id': widget.userId});
-      } else if (_friendState == 'pending_in' && _friendshipId != null) {
+        sendNotification(userId: widget.userId, type: 'friend_request');
+        await _loadFriendship();
+      } catch (_) {
+        if (mounted) {
+          setState(() => _friendState = 'none');
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Не удалось отправить заявку')),
+          );
+        }
+      }
+    } else if (_friendState == 'pending_in' && _friendshipId != null) {
+      setState(() => _friendState = 'friends');
+      try {
         await _client
             .from('friendships')
             .update({'status': 'accepted'}).eq('id', _friendshipId!);
-      } else {
-        return;
-      }
-      await _loadFriendship();
-    } catch (_) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Не удалось выполнить действие')),
-        );
+        sendNotification(userId: widget.userId, type: 'friend_accept');
+        await _loadFriendship();
+      } catch (_) {
+        if (mounted) {
+          setState(() => _friendState = 'pending_in');
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Не удалось принять заявку')),
+          );
+        }
       }
     }
   }
@@ -130,6 +146,7 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
     final avatarUrl = _profile?['avatar_url'] as String?;
     final muted = theme.textTheme.bodyMedium?.color?.withValues(alpha: 0.5);
 
+    final isMe = widget.userId == _uid;
     final (buttonLabel, buttonEnabled) = switch (_friendState) {
       'friends' => ('В друзьях', false),
       'pending_out' => ('Заявка отправлена', false),
@@ -178,18 +195,33 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
             ),
           ],
           const SizedBox(height: 14),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 48),
-            child: buttonEnabled
-                ? ElevatedButton(
-                    onPressed: _friendAction,
-                    child: Text(buttonLabel),
-                  )
-                : OutlinedButton(
-                    onPressed: null,
-                    child: Text(buttonLabel),
+          if (!isMe)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 48),
+              child: buttonEnabled
+                  ? ElevatedButton(
+                      onPressed: _friendAction,
+                      child: Text(buttonLabel),
+                    )
+                  : OutlinedButton(
+                      onPressed: null,
+                      child: Text(buttonLabel),
+                    ),
+            ),
+          if (!isMe)
+            TextButton.icon(
+              onPressed: () => Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => ChatScreen(
+                    peerId: widget.userId,
+                    peerName: username,
+                    peerAvatar: avatarUrl,
                   ),
-          ),
+                ),
+              ),
+              icon: const Icon(Icons.chat_bubble_outline, size: 18),
+              label: const Text('Написать'),
+            ),
           const SizedBox(height: 16),
           Expanded(
             child: PostsGrid(

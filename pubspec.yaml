@@ -40,6 +40,7 @@ dependencies:
   video_player: ^2.14.1
   shared_preferences: ^2.5.6
   url_launcher: ^6.3.3
+  flutter_native_splash: ^2.4.8
 
 dev_dependencies:
   flutter_test:
@@ -51,6 +52,7 @@ dev_dependencies:
   # package. See that file for information about deactivating specific lint
   # rules and activating additional ones.
   flutter_lints: ^6.0.0
+  flutter_launcher_icons: ^0.14.4
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
@@ -93,3 +95,18 @@ flutter:
   #
   # For details regarding fonts from package dependencies,
   # see https://flutter.dev/to/font-from-package
+
+flutter_native_splash:
+  color: "#FAF7F2"
+  color_dark: "#121212"
+  image: assets/icon/splash_logo.png
+  image_dark: assets/icon/splash_logo.png
+  android: true
+  ios: true
+  web: true
+
+flutter_launcher_icons:
+  android: true
+  image_path: "assets/icon/app_icon.png"
+  adaptive_icon_background: "#FAF7F2"
+  adaptive_icon_foreground: "assets/icon/app_icon_fg.png"

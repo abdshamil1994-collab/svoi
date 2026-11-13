@@ -2,7 +2,7 @@ import 'package:material_ui/material_ui.dart';
 
 import 'feed_screen.dart';
 import 'games_screen.dart';
-import 'placeholder_screen.dart';
+import 'messages_screen.dart';
 import 'profile_screen.dart';
 
 class MainScreen extends StatefulWidget {
@@ -23,7 +23,7 @@ class _MainScreenState extends State<MainScreen> {
     final tabs = [
       FeedScreen(key: ValueKey('feed-$_feedVisits')),
       const GamesScreen(),
-      const PlaceholderScreen(title: 'Сообщения'),
+      const MessagesScreen(),
       const ProfileScreen(),
     ];
 
