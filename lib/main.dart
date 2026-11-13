@@ -4,6 +4,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'app_theme.dart';
 import 'auth_gate.dart';
 import 'login_screen.dart';
+import 'settings.dart';
 import 'supabase_config.dart';
 
 Future<void> main() async {
@@ -12,6 +13,7 @@ Future<void> main() async {
     url: SupabaseConfig.url,
     publishableKey: SupabaseConfig.publishableKey,
   );
+  await AppSettings.load();
   runApp(const SvoiApp());
 }
 
@@ -20,13 +22,18 @@ class SvoiApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'SVOI',
-      debugShowCheckedModeBanner: false,
-      theme: AppTheme.light,
-      darkTheme: AppTheme.dark,
-      themeMode: ThemeMode.system,
-      home: _initialScreen(),
+    return ValueListenableBuilder<ThemeMode>(
+      valueListenable: AppSettings.themeMode,
+      builder: (context, mode, _) {
+        return MaterialApp(
+          title: 'SVOI',
+          debugShowCheckedModeBanner: false,
+          theme: AppTheme.light,
+          darkTheme: AppTheme.dark,
+          themeMode: mode,
+          home: _initialScreen(),
+        );
+      },
     );
   }
 
