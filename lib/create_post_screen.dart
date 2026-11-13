@@ -18,8 +18,28 @@ class _CreatePostScreenState extends State<CreatePostScreen> {
   Uint8List? _videoBytes;
   bool _loading = false;
   String? _errorText;
+  Map<String, dynamic>? _myProfile;
 
   SupabaseClient get _client => Supabase.instance.client;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadMyProfile();
+  }
+
+  Future<void> _loadMyProfile() async {
+    final uid = _client.auth.currentUser?.id;
+    if (uid == null) return;
+    try {
+      final row = await _client
+          .from('profiles')
+          .select('username, avatar_url')
+          .eq('id', uid)
+          .maybeSingle();
+      if (mounted) setState(() => _myProfile = row);
+    } catch (_) {}
+  }
 
   @override
   void dispose() {
@@ -61,6 +81,8 @@ class _CreatePostScreenState extends State<CreatePostScreen> {
       _loading = true;
       _errorText = null;
     });
+
+    Map<String, dynamic> row;
     try {
       final uid = _client.auth.currentUser!.id;
       final stamp = DateTime.now().millisecondsSinceEpoch;
@@ -89,22 +111,33 @@ class _CreatePostScreenState extends State<CreatePostScreen> {
         videoUrl = _client.storage.from('post-videos').getPublicUrl(path);
       }
 
-      await _client.from('posts').insert({
-        'user_id': uid,
-        'text': text,
-        'image_url': imageUrl,
-        'video_url': videoUrl,
-      });
-
-      if (mounted) Navigator.of(context).pop(true);
+      // Только падение самой вставки считается ошибкой отправки.
+      row = await _client
+          .from('posts')
+          .insert({
+            'user_id': uid,
+            'text': text,
+            'image_url': imageUrl,
+            'video_url': videoUrl,
+          })
+          .select('id, text, image_url, video_url, created_at')
+          .single();
     } catch (_) {
       if (mounted) {
-        setState(() =>
-            _errorText = 'Не удалось опубликовать пост. Попробуйте ещё раз');
+        setState(() {
+          _loading = false;
+          _errorText = 'Не удалось опубликовать пост. Попробуйте ещё раз';
+        });
       }
-    } finally {
-      if (mounted) setState(() => _loading = false);
+      return;
     }
+
+    if (!mounted) return;
+    setState(() => _loading = false);
+    Navigator.of(context).pop({
+      ...row,
+      'profiles': _myProfile,
+    });
   }
 
   @override

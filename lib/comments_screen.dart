@@ -15,48 +15,105 @@ class CommentsScreen extends StatefulWidget {
 
 class _CommentsScreenState extends State<CommentsScreen> {
   final _inputController = TextEditingController();
-  late Future<List<Map<String, dynamic>>> _commentsFuture = _loadComments();
+  List<Map<String, dynamic>>? _comments;
+  bool _loadFailed = false;
   bool _sending = false;
+  Map<String, dynamic>? _myProfile;
 
   SupabaseClient get _client => Supabase.instance.client;
 
-  Future<List<Map<String, dynamic>>> _loadComments() async {
-    final data = await _client
-        .from('comments')
-        .select('id, text, created_at, profiles(username, avatar_url)')
-        .eq('post_id', widget.postId)
-        .order('created_at');
-    return List<Map<String, dynamic>>.from(data);
+  @override
+  void initState() {
+    super.initState();
+    _load();
+    _loadMyProfile();
   }
 
-  Future<void> _refresh() async {
-    setState(() => _commentsFuture = _loadComments());
-    await _commentsFuture;
+  Future<void> _loadMyProfile() async {
+    final uid = _client.auth.currentUser?.id;
+    if (uid == null) return;
+    try {
+      final row = await _client
+          .from('profiles')
+          .select('username, avatar_url')
+          .eq('id', uid)
+          .maybeSingle();
+      if (mounted) setState(() => _myProfile = row);
+    } catch (_) {}
+  }
+
+  Future<void> _load() async {
+    try {
+      final data = await _client
+          .from('comments')
+          .select('id, text, created_at, profiles(username, avatar_url)')
+          .eq('post_id', widget.postId)
+          .order('created_at');
+      if (mounted) {
+        setState(() {
+          _comments = List<Map<String, dynamic>>.from(data);
+          _loadFailed = false;
+        });
+      }
+    } catch (_) {
+      if (mounted) setState(() => _loadFailed = true);
+    }
+  }
+
+  /// Тихое обновление: падение не считается ошибкой.
+  Future<void> _refreshQuietly() async {
+    try {
+      final data = await _client
+          .from('comments')
+          .select('id, text, created_at, profiles(username, avatar_url)')
+          .eq('post_id', widget.postId)
+          .order('created_at');
+      if (mounted) {
+        setState(() {
+          _comments = List<Map<String, dynamic>>.from(data);
+          _loadFailed = false;
+        });
+      }
+    } catch (_) {}
   }
 
   Future<void> _send() async {
     final text = _inputController.text.trim();
     if (text.isEmpty || _sending) return;
     setState(() => _sending = true);
+
+    // Шаг 1: вставка. Только её падение считается ошибкой отправки.
     try {
       await _client.from('comments').insert({
         'post_id': widget.postId,
         'user_id': _client.auth.currentUser!.id,
         'text': text,
       });
-      _inputController.clear();
-      await _refresh();
     } catch (_) {
       if (mounted) {
+        setState(() => _sending = false);
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Не удалось отправить комментарий'),
-          ),
+          const SnackBar(content: Text('Не удалось отправить комментарий')),
         );
       }
-    } finally {
-      if (mounted) setState(() => _sending = false);
+      return;
     }
+
+    // Шаг 2: локальное обновление + тихая догрузка списка.
+    if (!mounted) return;
+    _inputController.clear();
+    setState(() {
+      _sending = false;
+      _comments = [
+        ...?_comments,
+        {
+          'text': text,
+          'created_at': DateTime.now().toIso8601String(),
+          'profiles': _myProfile,
+        },
+      ];
+    });
+    _refreshQuietly();
   }
 
   @override
@@ -78,112 +135,7 @@ class _CommentsScreenState extends State<CommentsScreen> {
       ),
       body: Column(
         children: [
-          Expanded(
-            child: FutureBuilder<List<Map<String, dynamic>>>(
-              future: _commentsFuture,
-              builder: (context, snapshot) {
-                if (snapshot.hasError) {
-                  return Center(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Text(
-                          'Комментарии недоступны',
-                          style: TextStyle(
-                            color: theme.textTheme.bodyMedium?.color
-                                ?.withValues(alpha: 0.55),
-                          ),
-                        ),
-                        const SizedBox(height: 12),
-                        TextButton(
-                          onPressed: _refresh,
-                          child: const Text('Повторить'),
-                        ),
-                      ],
-                    ),
-                  );
-                }
-                if (!snapshot.hasData) {
-                  return const Center(child: CircularProgressIndicator());
-                }
-                final comments = snapshot.data!;
-                if (comments.isEmpty) {
-                  return Center(
-                    child: Text(
-                      'Комментариев пока нет',
-                      style: TextStyle(
-                        color: theme.textTheme.bodyMedium?.color
-                            ?.withValues(alpha: 0.55),
-                      ),
-                    ),
-                  );
-                }
-                return ListView.separated(
-                  padding: const EdgeInsets.all(16),
-                  itemCount: comments.length,
-                  separatorBuilder: (_, _) => const SizedBox(height: 14),
-                  itemBuilder: (context, i) {
-                    final c = comments[i];
-                    final profile = c['profiles'] as Map<String, dynamic>?;
-                    final avatarUrl = profile?['avatar_url'] as String?;
-                    final createdAt =
-                        DateTime.tryParse(c['created_at'] as String? ?? '');
-                    return Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        CircleAvatar(
-                          radius: 18,
-                          backgroundColor:
-                              AppColors.coral.withValues(alpha: 0.12),
-                          backgroundImage: avatarUrl != null
-                              ? NetworkImage(avatarUrl)
-                              : null,
-                          child: avatarUrl == null
-                              ? const Icon(Icons.person_outline,
-                                  size: 18, color: AppColors.coral)
-                              : null,
-                        ),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(
-                                children: [
-                                  Flexible(
-                                    child: Text(
-                                      profile?['username'] as String? ??
-                                          'без имени',
-                                      style: const TextStyle(
-                                          fontWeight: FontWeight.w600),
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
-                                  ),
-                                  if (createdAt != null) ...[
-                                    const SizedBox(width: 8),
-                                    Text(
-                                      timeAgo(createdAt),
-                                      style: TextStyle(
-                                        fontSize: 12,
-                                        color: theme.textTheme.bodyMedium?.color
-                                            ?.withValues(alpha: 0.5),
-                                      ),
-                                    ),
-                                  ],
-                                ],
-                              ),
-                              const SizedBox(height: 2),
-                              Text(c['text'] as String? ?? ''),
-                            ],
-                          ),
-                        ),
-                      ],
-                    );
-                  },
-                );
-              },
-            ),
-          ),
+          Expanded(child: _buildBody(theme)),
           SafeArea(
             top: false,
             child: Padding(
@@ -221,6 +173,106 @@ class _CommentsScreenState extends State<CommentsScreen> {
           ),
         ],
       ),
+    );
+  }
+
+  Widget _buildBody(ThemeData theme) {
+    if (_loadFailed && _comments == null) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Text(
+              'Комментарии недоступны',
+              style: TextStyle(
+                color:
+                    theme.textTheme.bodyMedium?.color?.withValues(alpha: 0.55),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextButton(
+              onPressed: () {
+                setState(() => _loadFailed = false);
+                _load();
+              },
+              child: const Text('Повторить'),
+            ),
+          ],
+        ),
+      );
+    }
+
+    final comments = _comments;
+    if (comments == null) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (comments.isEmpty) {
+      return Center(
+        child: Text(
+          'Комментариев пока нет',
+          style: TextStyle(
+            color: theme.textTheme.bodyMedium?.color?.withValues(alpha: 0.55),
+          ),
+        ),
+      );
+    }
+    return ListView.separated(
+      padding: const EdgeInsets.all(16),
+      itemCount: comments.length,
+      separatorBuilder: (_, _) => const SizedBox(height: 14),
+      itemBuilder: (context, i) {
+        final c = comments[i];
+        final profile = c['profiles'] as Map<String, dynamic>?;
+        final avatarUrl = profile?['avatar_url'] as String?;
+        final createdAt = DateTime.tryParse(c['created_at'] as String? ?? '');
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            CircleAvatar(
+              radius: 18,
+              backgroundColor: AppColors.coral.withValues(alpha: 0.12),
+              backgroundImage:
+                  avatarUrl != null ? NetworkImage(avatarUrl) : null,
+              child: avatarUrl == null
+                  ? const Icon(Icons.person_outline,
+                      size: 18, color: AppColors.coral)
+                  : null,
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Flexible(
+                        child: Text(
+                          profile?['username'] as String? ?? 'без имени',
+                          style: const TextStyle(fontWeight: FontWeight.w600),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      if (createdAt != null) ...[
+                        const SizedBox(width: 8),
+                        Text(
+                          timeAgo(createdAt),
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: theme.textTheme.bodyMedium?.color
+                                ?.withValues(alpha: 0.5),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                  const SizedBox(height: 2),
+                  Text(c['text'] as String? ?? ''),
+                ],
+              ),
+            ),
+          ],
+        );
+      },
     );
   }
 }

@@ -13,21 +13,27 @@ class MainScreen extends StatefulWidget {
 
 class _MainScreenState extends State<MainScreen> {
   int _tab = 0;
-
-  final _tabs = const [
-    FeedScreen(),
-    PlaceholderScreen(title: 'Друзья'),
-    PlaceholderScreen(title: 'Сообщения'),
-    ProfileScreen(),
-  ];
+  int _feedVisits = 0;
 
   @override
   Widget build(BuildContext context) {
+    // Ключ меняется при каждом входе на вкладку «Лента» — экран
+    // пересоздаётся и заново подгружает посты.
+    final tabs = [
+      FeedScreen(key: ValueKey('feed-$_feedVisits')),
+      const PlaceholderScreen(title: 'Друзья'),
+      const PlaceholderScreen(title: 'Сообщения'),
+      const ProfileScreen(),
+    ];
+
     return Scaffold(
-      body: IndexedStack(index: _tab, children: _tabs),
+      body: tabs[_tab],
       bottomNavigationBar: NavigationBar(
         selectedIndex: _tab,
-        onDestinationSelected: (i) => setState(() => _tab = i),
+        onDestinationSelected: (i) => setState(() {
+          if (i == 0) _feedVisits++;
+          _tab = i;
+        }),
         destinations: const [
           NavigationDestination(
             icon: Icon(Icons.dynamic_feed_outlined),

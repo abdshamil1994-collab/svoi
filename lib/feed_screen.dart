@@ -24,10 +24,44 @@ class FeedScreen extends StatefulWidget {
 }
 
 class _FeedScreenState extends State<FeedScreen> {
-  late Future<List<Map<String, dynamic>>> _postsFuture = _loadPosts();
+  List<Map<String, dynamic>>? _posts;
+  bool _loadFailed = false;
   Set<String> _myLikes = {};
 
   SupabaseClient get _client => Supabase.instance.client;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final posts = await _loadPosts();
+      if (mounted) {
+        setState(() {
+          _posts = posts;
+          _loadFailed = false;
+        });
+      }
+    } catch (_) {
+      if (mounted) setState(() => _loadFailed = true);
+    }
+  }
+
+  /// Тихое обновление: падение не считается ошибкой, список остаётся как есть.
+  Future<void> _refreshQuietly() async {
+    try {
+      final posts = await _loadPosts();
+      if (mounted) {
+        setState(() {
+          _posts = posts;
+          _loadFailed = false;
+        });
+      }
+    } catch (_) {}
+  }
 
   Future<List<Map<String, dynamic>>> _loadPosts() async {
     try {
@@ -73,16 +107,14 @@ class _FeedScreenState extends State<FeedScreen> {
     return List<Map<String, dynamic>>.from(data);
   }
 
-  Future<void> _refresh() async {
-    setState(() => _postsFuture = _loadPosts());
-    await _postsFuture;
-  }
-
   Future<void> _createPost() async {
-    final created = await Navigator.of(context).push<bool>(
+    final newPost = await Navigator.of(context).push<Map<String, dynamic>>(
       MaterialPageRoute(builder: (_) => const CreatePostScreen()),
     );
-    if (created == true) _refresh();
+    if (newPost == null || !mounted) return;
+    // Оптимистично добавляем пост в начало списка, затем тихо догружаем ленту.
+    setState(() => _posts = [newPost, ...?_posts]);
+    _refreshQuietly();
   }
 
   int _countOf(Map<String, dynamic> post, String key) {
@@ -104,68 +136,71 @@ class _FeedScreenState extends State<FeedScreen> {
         backgroundColor: theme.scaffoldBackgroundColor,
         elevation: 0,
       ),
-      body: FutureBuilder<List<Map<String, dynamic>>>(
-        future: _postsFuture,
-        builder: (context, snapshot) {
-          if (snapshot.hasError) {
-            return Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Text(
-                    'Не удалось загрузить ленту',
-                    style: TextStyle(
-                      color: theme.textTheme.bodyMedium?.color
-                          ?.withValues(alpha: 0.55),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  TextButton(
-                    onPressed: _refresh,
-                    child: const Text('Повторить'),
-                  ),
-                ],
-              ),
-            );
-          }
-          if (!snapshot.hasData) {
-            return const Center(child: CircularProgressIndicator());
-          }
-          final posts = snapshot.data!;
-          if (posts.isEmpty) {
-            return Center(
-              child: Text(
-                'Пока пусто. Нажмите + и создайте первый пост',
-                style: TextStyle(
-                  color: theme.textTheme.bodyMedium?.color
-                      ?.withValues(alpha: 0.55),
-                ),
-              ),
-            );
-          }
-          return RefreshIndicator(
-            onRefresh: _refresh,
-            child: ListView.separated(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 96),
-              itemCount: posts.length,
-              separatorBuilder: (_, _) => const SizedBox(height: 12),
-              itemBuilder: (context, i) {
-                final post = posts[i];
-                return PostCard(
-                  post: post,
-                  likesCount: _countOf(post, 'likes'),
-                  commentsCount: _countOf(post, 'comments'),
-                  liked: _myLikes.contains(post['id']),
-                );
-              },
-            ),
-          );
-        },
-      ),
+      body: _buildBody(theme),
       floatingActionButton: FloatingActionButton(
         onPressed: _createPost,
         backgroundColor: AppColors.coral,
         child: const Icon(Icons.add, color: Colors.white),
+      ),
+    );
+  }
+
+  Widget _buildBody(ThemeData theme) {
+    if (_loadFailed && _posts == null) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Text(
+              'Не удалось загрузить ленту',
+              style: TextStyle(
+                color:
+                    theme.textTheme.bodyMedium?.color?.withValues(alpha: 0.55),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextButton(
+              onPressed: () {
+                setState(() => _loadFailed = false);
+                _load();
+              },
+              child: const Text('Повторить'),
+            ),
+          ],
+        ),
+      );
+    }
+
+    final posts = _posts;
+    if (posts == null) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (posts.isEmpty) {
+      return Center(
+        child: Text(
+          'Пока пусто. Нажмите + и создайте первый пост',
+          style: TextStyle(
+            color: theme.textTheme.bodyMedium?.color?.withValues(alpha: 0.55),
+          ),
+        ),
+      );
+    }
+    return RefreshIndicator(
+      onRefresh: _load,
+      child: ListView.separated(
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 96),
+        itemCount: posts.length,
+        separatorBuilder: (_, _) => const SizedBox(height: 12),
+        itemBuilder: (context, i) {
+          final post = posts[i];
+          return PostCard(
+            key: ValueKey(post['id'] ?? i),
+            post: post,
+            likesCount: _countOf(post, 'likes'),
+            commentsCount: _countOf(post, 'comments'),
+            liked: _myLikes.contains(post['id']),
+          );
+        },
       ),
     );
   }
@@ -197,7 +232,7 @@ class _PostCardState extends State<PostCard> {
 
   Future<void> _toggleLike() async {
     final uid = _client.auth.currentUser!.id;
-    final postId = widget.post['id'] as String;
+    final postId = widget.post['id'] as String?;
 
     // Оптимистичное переключение, запрос уходит в фоне.
     setState(() {
@@ -205,6 +240,7 @@ class _PostCardState extends State<PostCard> {
       _likes += _liked ? 1 : -1;
     });
 
+    if (postId == null) return;
     try {
       if (_liked) {
         await _client.from('likes').insert({'post_id': postId, 'user_id': uid});
@@ -232,10 +268,10 @@ class _PostCardState extends State<PostCard> {
   }
 
   Future<void> _openComments() async {
+    final postId = widget.post['id'] as String?;
+    if (postId == null) return;
     await Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => CommentsScreen(postId: widget.post['id'] as String),
-      ),
+      MaterialPageRoute(builder: (_) => CommentsScreen(postId: postId)),
     );
   }
 
