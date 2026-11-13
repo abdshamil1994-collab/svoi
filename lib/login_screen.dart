@@ -4,7 +4,7 @@ import 'package:material_ui/material_ui.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'app_theme.dart';
-import 'home_screen.dart';
+import 'auth_gate.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -82,9 +82,9 @@ class _LoginScreenState extends State<LoginScreen> {
     }
   }
 
-  void _goHome() {
+  void _goNext() {
     Navigator.of(context).pushReplacement(
-      MaterialPageRoute(builder: (_) => const HomeScreen()),
+      MaterialPageRoute(builder: (_) => const AuthGate()),
     );
   }
 
@@ -95,7 +95,7 @@ class _LoginScreenState extends State<LoginScreen> {
         email: _emailController.text.trim(),
         password: _passwordController.text,
       );
-      if (mounted) _goHome();
+      if (mounted) _goNext();
     });
   }
 
@@ -108,7 +108,7 @@ class _LoginScreenState extends State<LoginScreen> {
       );
       if (!mounted) return;
       if (response.session != null) {
-        _goHome();
+        _goNext();
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(

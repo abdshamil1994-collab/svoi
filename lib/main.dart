@@ -2,6 +2,7 @@ import 'package:material_ui/material_ui.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'app_theme.dart';
+import 'auth_gate.dart';
 import 'login_screen.dart';
 import 'supabase_config.dart';
 
@@ -25,7 +26,18 @@ class SvoiApp extends StatelessWidget {
       theme: AppTheme.light,
       darkTheme: AppTheme.dark,
       themeMode: ThemeMode.system,
-      home: const LoginScreen(),
+      home: _initialScreen(),
     );
+  }
+
+  Widget _initialScreen() {
+    try {
+      if (Supabase.instance.client.auth.currentSession != null) {
+        return const AuthGate();
+      }
+    } catch (_) {
+      // Supabase не инициализирован (например, в тестах) — показываем вход.
+    }
+    return const LoginScreen();
   }
 }
