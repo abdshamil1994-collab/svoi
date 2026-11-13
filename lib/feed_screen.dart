@@ -2,7 +2,9 @@ import 'package:material_ui/material_ui.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'app_theme.dart';
+import 'comments_screen.dart';
 import 'create_post_screen.dart';
+import 'video_player_screen.dart';
 
 String timeAgo(DateTime time) {
   final diff = DateTime.now().difference(time.toLocal());
@@ -23,13 +25,30 @@ class FeedScreen extends StatefulWidget {
 
 class _FeedScreenState extends State<FeedScreen> {
   late Future<List<Map<String, dynamic>>> _postsFuture = _loadPosts();
+  Set<String> _myLikes = {};
+
+  SupabaseClient get _client => Supabase.instance.client;
 
   Future<List<Map<String, dynamic>>> _loadPosts() async {
-    final data = await Supabase.instance.client
+    final data = await _client
         .from('posts')
-        .select('id, text, image_url, created_at, profiles(username, avatar_url)')
+        .select(
+          'id, text, image_url, video_url, created_at, '
+          'profiles(username, avatar_url), likes(count), comments(count)',
+        )
         .order('created_at', ascending: false)
         .limit(50);
+
+    final uid = _client.auth.currentUser?.id;
+    if (uid != null) {
+      final mine = await _client
+          .from('likes')
+          .select('post_id')
+          .eq('user_id', uid);
+      _myLikes = {
+        for (final row in mine as List) row['post_id'] as String,
+      };
+    }
     return List<Map<String, dynamic>>.from(data);
   }
 
@@ -43,6 +62,14 @@ class _FeedScreenState extends State<FeedScreen> {
       MaterialPageRoute(builder: (_) => const CreatePostScreen()),
     );
     if (created == true) _refresh();
+  }
+
+  int _countOf(Map<String, dynamic> post, String key) {
+    final value = post[key];
+    if (value is List && value.isNotEmpty && value.first is Map) {
+      return (value.first['count'] as num?)?.toInt() ?? 0;
+    }
+    return 0;
   }
 
   @override
@@ -80,7 +107,15 @@ class _FeedScreenState extends State<FeedScreen> {
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 96),
               itemCount: posts.length,
               separatorBuilder: (_, _) => const SizedBox(height: 12),
-              itemBuilder: (context, i) => _PostCard(post: posts[i]),
+              itemBuilder: (context, i) {
+                final post = posts[i];
+                return PostCard(
+                  post: post,
+                  likesCount: _countOf(post, 'likes'),
+                  commentsCount: _countOf(post, 'comments'),
+                  liked: _myLikes.contains(post['id']),
+                );
+              },
             ),
           );
         },
@@ -94,17 +129,74 @@ class _FeedScreenState extends State<FeedScreen> {
   }
 }
 
-class _PostCard extends StatefulWidget {
-  const _PostCard({required this.post});
+class PostCard extends StatefulWidget {
+  const PostCard({
+    super.key,
+    required this.post,
+    required this.likesCount,
+    required this.commentsCount,
+    required this.liked,
+  });
 
   final Map<String, dynamic> post;
+  final int likesCount;
+  final int commentsCount;
+  final bool liked;
 
   @override
-  State<_PostCard> createState() => _PostCardState();
+  State<PostCard> createState() => _PostCardState();
 }
 
-class _PostCardState extends State<_PostCard> {
-  bool _liked = false;
+class _PostCardState extends State<PostCard> {
+  late bool _liked = widget.liked;
+  late int _likes = widget.likesCount;
+
+  SupabaseClient get _client => Supabase.instance.client;
+
+  Future<void> _toggleLike() async {
+    final uid = _client.auth.currentUser!.id;
+    final postId = widget.post['id'] as String;
+
+    // Оптимистичное переключение, запрос уходит в фоне.
+    setState(() {
+      _liked = !_liked;
+      _likes += _liked ? 1 : -1;
+    });
+
+    try {
+      if (_liked) {
+        await _client.from('likes').insert({'post_id': postId, 'user_id': uid});
+      } else {
+        await _client
+            .from('likes')
+            .delete()
+            .eq('post_id', postId)
+            .eq('user_id', uid);
+      }
+    } catch (_) {
+      // Откат при ошибке.
+      if (mounted) {
+        setState(() {
+          _liked = !_liked;
+          _likes += _liked ? 1 : -1;
+        });
+      }
+    }
+  }
+
+  Future<void> _openComments() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => CommentsScreen(postId: widget.post['id'] as String),
+      ),
+    );
+  }
+
+  void _openVideo(String url) {
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => VideoPlayerScreen(url: url)),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -115,7 +207,17 @@ class _PostCardState extends State<_PostCard> {
     final avatarUrl = profile?['avatar_url'] as String?;
     final text = widget.post['text'] as String? ?? '';
     final imageUrl = widget.post['image_url'] as String?;
+    final videoUrl = widget.post['video_url'] as String?;
     final createdAt = DateTime.tryParse(widget.post['created_at'] as String? ?? '');
+
+    final (badgeIcon, badgeLabel) = videoUrl != null
+        ? (Icons.videocam_outlined, 'Видео')
+        : imageUrl != null
+            ? (Icons.photo_outlined, 'Фото')
+            : (Icons.notes, 'Текст');
+
+    final mutedColor =
+        theme.textTheme.bodyMedium?.color?.withValues(alpha: 0.5);
 
     return Container(
       decoration: BoxDecoration(
@@ -153,16 +255,31 @@ class _PostCardState extends State<_PostCard> {
                     if (createdAt != null)
                       Text(
                         timeAgo(createdAt),
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: theme.textTheme.bodyMedium?.color
-                              ?.withValues(alpha: 0.5),
-                        ),
+                        style: TextStyle(fontSize: 12, color: mutedColor),
                       ),
                   ],
                 ),
               ),
             ],
+          ),
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+            decoration: BoxDecoration(
+              color: AppColors.coral.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(badgeIcon, size: 14, color: AppColors.coral),
+                const SizedBox(width: 4),
+                Text(
+                  badgeLabel,
+                  style: const TextStyle(fontSize: 12, color: AppColors.coral),
+                ),
+              ],
+            ),
           ),
           const SizedBox(height: 10),
           Text(text),
@@ -177,15 +294,45 @@ class _PostCardState extends State<_PostCard> {
               ),
             ),
           ],
-          const SizedBox(height: 6),
-          IconButton(
-            onPressed: () => setState(() => _liked = !_liked),
-            icon: Icon(
-              _liked ? Icons.favorite : Icons.favorite_border,
-              color: _liked
-                  ? AppColors.coral
-                  : theme.textTheme.bodyMedium?.color?.withValues(alpha: 0.45),
+          if (videoUrl != null) ...[
+            const SizedBox(height: 10),
+            GestureDetector(
+              onTap: () => _openVideo(videoUrl),
+              child: Container(
+                height: 180,
+                width: double.infinity,
+                decoration: BoxDecoration(
+                  color: Colors.black87,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Center(
+                  child: CircleAvatar(
+                    radius: 28,
+                    backgroundColor: Colors.white24,
+                    child: Icon(Icons.play_arrow,
+                        size: 36, color: Colors.white),
+                  ),
+                ),
+              ),
             ),
+          ],
+          Row(
+            children: [
+              IconButton(
+                onPressed: _toggleLike,
+                icon: Icon(
+                  _liked ? Icons.favorite : Icons.favorite_border,
+                  color: _liked ? AppColors.coral : mutedColor,
+                ),
+              ),
+              Text('$_likes', style: TextStyle(color: mutedColor)),
+              const SizedBox(width: 12),
+              IconButton(
+                onPressed: _openComments,
+                icon: Icon(Icons.chat_bubble_outline, color: mutedColor),
+              ),
+              Text('${widget.commentsCount}', style: TextStyle(color: mutedColor)),
+            ],
           ),
         ],
       ),

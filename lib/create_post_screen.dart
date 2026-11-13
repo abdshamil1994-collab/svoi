@@ -15,6 +15,7 @@ class CreatePostScreen extends StatefulWidget {
 class _CreatePostScreenState extends State<CreatePostScreen> {
   final _textController = TextEditingController();
   Uint8List? _imageBytes;
+  Uint8List? _videoBytes;
   bool _loading = false;
   String? _errorText;
 
@@ -34,7 +35,20 @@ class _CreatePostScreenState extends State<CreatePostScreen> {
     );
     if (picked == null) return;
     final bytes = await picked.readAsBytes();
-    setState(() => _imageBytes = bytes);
+    setState(() {
+      _imageBytes = bytes;
+      _videoBytes = null; // фото и видео взаимоисключающие
+    });
+  }
+
+  Future<void> _pickVideo() async {
+    final picked = await ImagePicker().pickVideo(source: ImageSource.gallery);
+    if (picked == null) return;
+    final bytes = await picked.readAsBytes();
+    setState(() {
+      _videoBytes = bytes;
+      _imageBytes = null; // фото и видео взаимоисключающие
+    });
   }
 
   Future<void> _publish() async {
@@ -49,10 +63,12 @@ class _CreatePostScreenState extends State<CreatePostScreen> {
     });
     try {
       final uid = _client.auth.currentUser!.id;
+      final stamp = DateTime.now().millisecondsSinceEpoch;
       String? imageUrl;
+      String? videoUrl;
 
       if (_imageBytes != null) {
-        final path = '$uid/${DateTime.now().millisecondsSinceEpoch}.jpg';
+        final path = '$uid/$stamp.jpg';
         await _client.storage.from('post-images').uploadBinary(
               path,
               _imageBytes!,
@@ -62,10 +78,22 @@ class _CreatePostScreenState extends State<CreatePostScreen> {
         imageUrl = _client.storage.from('post-images').getPublicUrl(path);
       }
 
+      if (_videoBytes != null) {
+        final path = '$uid/$stamp.mp4';
+        await _client.storage.from('post-videos').uploadBinary(
+              path,
+              _videoBytes!,
+              fileOptions:
+                  const FileOptions(upsert: true, contentType: 'video/mp4'),
+            );
+        videoUrl = _client.storage.from('post-videos').getPublicUrl(path);
+      }
+
       await _client.from('posts').insert({
         'user_id': uid,
         'text': text,
         'image_url': imageUrl,
+        'video_url': videoUrl,
       });
 
       if (mounted) Navigator.of(context).pop(true);
@@ -83,6 +111,7 @@ class _CreatePostScreenState extends State<CreatePostScreen> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
+    final borderColor = isDark ? AppColors.darkBorder : AppColors.lightBorder;
 
     return Scaffold(
       appBar: AppBar(
@@ -108,38 +137,70 @@ class _CreatePostScreenState extends State<CreatePostScreen> {
             ),
             const SizedBox(height: 12),
             if (_imageBytes != null)
-              Stack(
-                alignment: Alignment.topRight,
-                children: [
-                  ClipRRect(
+              _AttachmentPreview(
+                onRemove: _loading
+                    ? null
+                    : () => setState(() => _imageBytes = null),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: Image.memory(_imageBytes!,
+                      width: double.infinity, fit: BoxFit.cover),
+                ),
+              )
+            else if (_videoBytes != null)
+              _AttachmentPreview(
+                onRemove: _loading
+                    ? null
+                    : () => setState(() => _videoBytes = null),
+                child: Container(
+                  height: 140,
+                  decoration: BoxDecoration(
+                    color: Colors.black87,
                     borderRadius: BorderRadius.circular(12),
-                    child: Image.memory(_imageBytes!,
-                        width: double.infinity, fit: BoxFit.cover),
                   ),
-                  IconButton(
-                    onPressed: _loading
-                        ? null
-                        : () => setState(() => _imageBytes = null),
-                    icon: const CircleAvatar(
-                      radius: 14,
-                      backgroundColor: Colors.black54,
-                      child: Icon(Icons.close, size: 16, color: Colors.white),
+                  child: const Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.videocam_outlined,
+                            size: 36, color: Colors.white70),
+                        SizedBox(height: 6),
+                        Text('Видео прикреплено',
+                            style: TextStyle(color: Colors.white70)),
+                      ],
+                    ),
+                  ),
+                ),
+              )
+            else
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: _loading ? null : _pickImage,
+                      icon: const Icon(Icons.image_outlined),
+                      label: const Text('Фото'),
+                      style: OutlinedButton.styleFrom(
+                        minimumSize: const Size.fromHeight(46),
+                        side: BorderSide(color: borderColor),
+                        foregroundColor: theme.textTheme.bodyMedium?.color,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: _loading ? null : _pickVideo,
+                      icon: const Icon(Icons.videocam_outlined),
+                      label: const Text('Видео'),
+                      style: OutlinedButton.styleFrom(
+                        minimumSize: const Size.fromHeight(46),
+                        side: BorderSide(color: borderColor),
+                        foregroundColor: theme.textTheme.bodyMedium?.color,
+                      ),
                     ),
                   ),
                 ],
-              )
-            else
-              OutlinedButton.icon(
-                onPressed: _loading ? null : _pickImage,
-                icon: const Icon(Icons.image_outlined),
-                label: const Text('Добавить фото'),
-                style: OutlinedButton.styleFrom(
-                  minimumSize: const Size.fromHeight(46),
-                  side: BorderSide(
-                    color: isDark ? AppColors.darkBorder : AppColors.lightBorder,
-                  ),
-                  foregroundColor: theme.textTheme.bodyMedium?.color,
-                ),
               ),
             if (_errorText != null) ...[
               const SizedBox(height: 12),
@@ -165,6 +226,31 @@ class _CreatePostScreenState extends State<CreatePostScreen> {
           ],
         ),
       ),
+    );
+  }
+}
+
+class _AttachmentPreview extends StatelessWidget {
+  const _AttachmentPreview({required this.child, this.onRemove});
+
+  final Widget child;
+  final VoidCallback? onRemove;
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      alignment: Alignment.topRight,
+      children: [
+        child,
+        IconButton(
+          onPressed: onRemove,
+          icon: const CircleAvatar(
+            radius: 14,
+            backgroundColor: Colors.black54,
+            child: Icon(Icons.close, size: 16, color: Colors.white),
+          ),
+        ),
+      ],
     );
   }
 }
