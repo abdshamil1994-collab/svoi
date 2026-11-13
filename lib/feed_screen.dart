@@ -44,7 +44,7 @@ class _FeedScreenState extends State<FeedScreen> {
         .from('posts')
         .select(
           'id, text, image_url, video_url, created_at, '
-          'profiles(username, avatar_url), likes(count), comments(count)',
+          'profiles!posts_user_id_fkey(username, avatar_url), likes(count), comments(count)',
         )
         .order('created_at', ascending: false)
         .limit(50);
@@ -67,7 +67,7 @@ class _FeedScreenState extends State<FeedScreen> {
     final data = await _client
         .from('posts')
         .select('id, text, image_url, video_url, created_at, '
-            'profiles(username, avatar_url)')
+            'profiles!posts_user_id_fkey(username, avatar_url)')
         .order('created_at', ascending: false)
         .limit(50);
     return List<Map<String, dynamic>>.from(data);
