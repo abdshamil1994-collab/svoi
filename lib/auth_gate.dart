@@ -1,7 +1,7 @@
 import 'package:material_ui/material_ui.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-import 'profile_screen.dart';
+import 'main_screen.dart';
 import 'profile_setup_screen.dart';
 
 Future<bool> hasProfile() async {
@@ -29,7 +29,7 @@ class AuthGate extends StatelessWidget {
           );
         }
         return snapshot.data!
-            ? const ProfileScreen()
+            ? const MainScreen()
             : const ProfileSetupScreen();
       },
     );
