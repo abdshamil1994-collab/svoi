@@ -4,6 +4,9 @@ on:
   push:
     branches: [main]
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -36,3 +39,10 @@ jobs:
           name: svoi-debug-apk
           path: build/app/outputs/flutter-apk/app-debug.apk
           retention-days: 30
+
+      - name: Publish APK to Releases (tag "latest")
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: latest
+          files: build/app/outputs/flutter-apk/app-debug.apk

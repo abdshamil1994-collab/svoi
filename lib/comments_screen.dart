@@ -82,6 +82,27 @@ class _CommentsScreenState extends State<CommentsScreen> {
             child: FutureBuilder<List<Map<String, dynamic>>>(
               future: _commentsFuture,
               builder: (context, snapshot) {
+                if (snapshot.hasError) {
+                  return Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Text(
+                          'Комментарии недоступны',
+                          style: TextStyle(
+                            color: theme.textTheme.bodyMedium?.color
+                                ?.withValues(alpha: 0.55),
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        TextButton(
+                          onPressed: _refresh,
+                          child: const Text('Повторить'),
+                        ),
+                      ],
+                    ),
+                  );
+                }
                 if (!snapshot.hasData) {
                   return const Center(child: CircularProgressIndicator());
                 }

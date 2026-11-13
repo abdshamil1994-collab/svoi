@@ -30,6 +30,16 @@ class _FeedScreenState extends State<FeedScreen> {
   SupabaseClient get _client => Supabase.instance.client;
 
   Future<List<Map<String, dynamic>>> _loadPosts() async {
+    try {
+      return await _loadPostsFull();
+    } on PostgrestException {
+      // Таблицы likes/comments ещё не созданы (миграция 003 не применена) —
+      // грузим ленту без счётчиков, они покажут нули.
+      return _loadPostsBasic();
+    }
+  }
+
+  Future<List<Map<String, dynamic>>> _loadPostsFull() async {
     final data = await _client
         .from('posts')
         .select(
@@ -49,6 +59,17 @@ class _FeedScreenState extends State<FeedScreen> {
         for (final row in mine as List) row['post_id'] as String,
       };
     }
+    return List<Map<String, dynamic>>.from(data);
+  }
+
+  Future<List<Map<String, dynamic>>> _loadPostsBasic() async {
+    _myLikes = {};
+    final data = await _client
+        .from('posts')
+        .select('id, text, image_url, video_url, created_at, '
+            'profiles(username, avatar_url)')
+        .order('created_at', ascending: false)
+        .limit(50);
     return List<Map<String, dynamic>>.from(data);
   }
 
@@ -86,6 +107,27 @@ class _FeedScreenState extends State<FeedScreen> {
       body: FutureBuilder<List<Map<String, dynamic>>>(
         future: _postsFuture,
         builder: (context, snapshot) {
+          if (snapshot.hasError) {
+            return Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text(
+                    'Не удалось загрузить ленту',
+                    style: TextStyle(
+                      color: theme.textTheme.bodyMedium?.color
+                          ?.withValues(alpha: 0.55),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextButton(
+                    onPressed: _refresh,
+                    child: const Text('Повторить'),
+                  ),
+                ],
+              ),
+            );
+          }
           if (!snapshot.hasData) {
             return const Center(child: CircularProgressIndicator());
           }
@@ -180,6 +222,11 @@ class _PostCardState extends State<PostCard> {
           _liked = !_liked;
           _likes += _liked ? 1 : -1;
         });
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Не удалось поставить лайк. Попробуйте позже'),
+          ),
+        );
       }
     }
   }
