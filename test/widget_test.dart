@@ -13,7 +13,7 @@ void main() {
     await tester.pumpWidget(const SvoiApp());
 
     expect(find.text('SVOI'), findsOneWidget);
-    expect(find.text('Email или телефон'), findsOneWidget);
+    expect(find.text('Email'), findsOneWidget);
     expect(find.text('Пароль'), findsOneWidget);
     expect(find.text('Войти'), findsOneWidget);
     expect(find.text('Забыли пароль?'), findsOneWidget);
@@ -24,7 +24,7 @@ void main() {
     await tester.tap(find.text('Войти'));
     await tester.pump();
 
-    expect(find.text('Введите email или телефон'), findsOneWidget);
+    expect(find.text('Введите email'), findsOneWidget);
     expect(find.text('Введите пароль'), findsOneWidget);
   });
 }

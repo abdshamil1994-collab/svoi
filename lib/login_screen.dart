@@ -1,8 +1,10 @@
 import 'dart:math' as math;
 
 import 'package:material_ui/material_ui.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'app_theme.dart';
+import 'home_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -13,29 +15,26 @@ class LoginScreen extends StatefulWidget {
 
 class _LoginScreenState extends State<LoginScreen> {
   final _formKey = GlobalKey<FormState>();
-  final _loginController = TextEditingController();
+  final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
   bool _obscurePassword = true;
+  bool _loading = false;
+  String? _errorText;
+
+  SupabaseClient get _auth => Supabase.instance.client;
 
   @override
   void dispose() {
-    _loginController.dispose();
+    _emailController.dispose();
     _passwordController.dispose();
     super.dispose();
   }
 
-  String? _validateLogin(String? value) {
+  String? _validateEmail(String? value) {
     final v = (value ?? '').trim();
-    if (v.isEmpty) return 'Введите email или телефон';
-    if (v.contains('@')) {
-      final emailOk = RegExp(r'^[\w.+-]+@[\w-]+\.[\w.]+$').hasMatch(v);
-      if (!emailOk) return 'Некорректный email';
-    } else {
-      final digits = v.replaceAll(RegExp(r'[^\d]'), '');
-      if (digits.length < 10 || digits.length > 15) {
-        return 'Некорректный номер телефона';
-      }
-    }
+    if (v.isEmpty) return 'Введите email';
+    final emailOk = RegExp(r'^[\w.+-]+@[\w-]+\.[\w.]+$').hasMatch(v);
+    if (!emailOk) return 'Некорректный email';
     return null;
   }
 
@@ -46,12 +45,78 @@ class _LoginScreenState extends State<LoginScreen> {
     return null;
   }
 
-  void _submit() {
-    if (_formKey.currentState!.validate()) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Вход выполнен (демо)')),
-      );
+  String _mapAuthError(Object error) {
+    if (error is AuthException) {
+      final msg = error.message.toLowerCase();
+      if (msg.contains('invalid login credentials')) {
+        return 'Неверный email или пароль';
+      }
+      if (msg.contains('email not confirmed')) {
+        return 'Email не подтверждён. Проверьте почту и перейдите по ссылке из письма';
+      }
+      if (msg.contains('user already registered')) {
+        return 'Пользователь с таким email уже зарегистрирован';
+      }
+      if (msg.contains('password')) {
+        return 'Пароль слишком простой — придумайте надёжнее';
+      }
+      if (msg.contains('rate limit')) {
+        return 'Слишком много попыток. Подождите немного и повторите';
+      }
+      return 'Ошибка авторизации: ${error.message}';
     }
+    return 'Нет соединения с сервером. Проверьте интернет и повторите';
+  }
+
+  Future<void> _runAuth(Future<void> Function() action) async {
+    setState(() {
+      _loading = true;
+      _errorText = null;
+    });
+    try {
+      await action();
+    } catch (e) {
+      if (mounted) setState(() => _errorText = _mapAuthError(e));
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  void _goHome() {
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute(builder: (_) => const HomeScreen()),
+    );
+  }
+
+  Future<void> _signIn() async {
+    if (!_formKey.currentState!.validate()) return;
+    await _runAuth(() async {
+      await _auth.auth.signInWithPassword(
+        email: _emailController.text.trim(),
+        password: _passwordController.text,
+      );
+      if (mounted) _goHome();
+    });
+  }
+
+  Future<void> _signUp() async {
+    if (!_formKey.currentState!.validate()) return;
+    await _runAuth(() async {
+      final response = await _auth.auth.signUp(
+        email: _emailController.text.trim(),
+        password: _passwordController.text,
+      );
+      if (!mounted) return;
+      if (response.session != null) {
+        _goHome();
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Аккаунт создан. Подтвердите email по ссылке из письма'),
+          ),
+        );
+      }
+    });
   }
 
   @override
@@ -93,17 +158,19 @@ class _LoginScreenState extends State<LoginScreen> {
                           ),
                           SizedBox(height: topGap * 0.7),
                           TextFormField(
-                            controller: _loginController,
+                            controller: _emailController,
                             keyboardType: TextInputType.emailAddress,
+                            enabled: !_loading,
                             decoration: const InputDecoration(
-                              hintText: 'Email или телефон',
+                              hintText: 'Email',
                             ),
-                            validator: _validateLogin,
+                            validator: _validateEmail,
                           ),
                           const SizedBox(height: 14),
                           TextFormField(
                             controller: _passwordController,
                             obscureText: _obscurePassword,
+                            enabled: !_loading,
                             decoration: InputDecoration(
                               hintText: 'Пароль',
                               suffixIcon: IconButton(
@@ -120,15 +187,47 @@ class _LoginScreenState extends State<LoginScreen> {
                             ),
                             validator: _validatePassword,
                           ),
+                          if (_errorText != null) ...[
+                            const SizedBox(height: 14),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 14, vertical: 10),
+                              decoration: BoxDecoration(
+                                color:
+                                    AppColors.error.withValues(alpha: 0.08),
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(
+                                  color:
+                                      AppColors.error.withValues(alpha: 0.4),
+                                ),
+                              ),
+                              child: Text(
+                                _errorText!,
+                                style: const TextStyle(
+                                  color: AppColors.error,
+                                  fontSize: 13.5,
+                                ),
+                              ),
+                            ),
+                          ],
                           const SizedBox(height: 22),
                           ElevatedButton(
-                            onPressed: _submit,
-                            child: const Text('Войти'),
+                            onPressed: _loading ? null : _signIn,
+                            child: _loading
+                                ? const SizedBox(
+                                    width: 22,
+                                    height: 22,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2.4,
+                                      color: Colors.white,
+                                    ),
+                                  )
+                                : const Text('Войти'),
                           ),
                           Align(
                             alignment: Alignment.centerRight,
                             child: TextButton(
-                              onPressed: () {},
+                              onPressed: _loading ? null : () {},
                               child: const Text('Забыли пароль?'),
                             ),
                           ),
@@ -152,7 +251,7 @@ class _LoginScreenState extends State<LoginScreen> {
                           ),
                           const SizedBox(height: 20),
                           OutlinedButton(
-                            onPressed: () {},
+                            onPressed: _loading ? null : _signUp,
                             child: const Text('Создать аккаунт'),
                           ),
                           const SizedBox(height: 28),
