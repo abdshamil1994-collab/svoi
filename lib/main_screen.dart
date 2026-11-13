@@ -1,6 +1,7 @@
 import 'package:material_ui/material_ui.dart';
 
 import 'feed_screen.dart';
+import 'games_screen.dart';
 import 'placeholder_screen.dart';
 import 'profile_screen.dart';
 
@@ -21,7 +22,7 @@ class _MainScreenState extends State<MainScreen> {
     // пересоздаётся и заново подгружает посты.
     final tabs = [
       FeedScreen(key: ValueKey('feed-$_feedVisits')),
-      const PlaceholderScreen(title: 'Друзья'),
+      const GamesScreen(),
       const PlaceholderScreen(title: 'Сообщения'),
       const ProfileScreen(),
     ];
@@ -41,9 +42,9 @@ class _MainScreenState extends State<MainScreen> {
             label: 'Лента',
           ),
           NavigationDestination(
-            icon: Icon(Icons.people_outline),
-            selectedIcon: Icon(Icons.people),
-            label: 'Друзья',
+            icon: Icon(Icons.sports_esports_outlined),
+            selectedIcon: Icon(Icons.sports_esports),
+            label: 'Развлечения',
           ),
           NavigationDestination(
             icon: Icon(Icons.chat_bubble_outline),

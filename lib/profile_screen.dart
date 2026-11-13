@@ -6,10 +6,17 @@ import 'app_theme.dart';
 import 'edit_profile_screen.dart';
 import 'login_screen.dart';
 import 'menu_screens.dart';
-import 'post_view_screen.dart';
+import 'post_grid.dart';
 import 'profile_drawer.dart';
 
-typedef ProfileStats = ({int posts, int likesGot, int commentsGot, int likesGiven});
+typedef ProfileStats = ({
+  int posts,
+  int likesGot,
+  int commentsGot,
+  int likesGiven,
+  int following,
+  int followers,
+});
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
@@ -20,7 +27,14 @@ class ProfileScreen extends StatefulWidget {
 
 class _ProfileScreenState extends State<ProfileScreen> {
   Map<String, dynamic>? _profile;
-  ProfileStats _stats = (posts: 0, likesGot: 0, commentsGot: 0, likesGiven: 0);
+  ProfileStats _stats = (
+    posts: 0,
+    likesGot: 0,
+    commentsGot: 0,
+    likesGiven: 0,
+    following: 0,
+    followers: 0,
+  );
   List<Map<String, dynamic>>? _myPosts;
   List<Map<String, dynamic>>? _likedPosts;
   bool _avatarUploading = false;
@@ -64,6 +78,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   Future<void> _loadStats() async {
     var posts = 0, likesGot = 0, commentsGot = 0, likesGiven = 0;
+    var following = 0, followers = 0;
     try {
       posts = (await _client
               .from('posts')
@@ -96,12 +111,32 @@ class _ProfileScreenState extends State<ProfileScreen> {
               .count(CountOption.exact))
           .count;
     } catch (_) {}
+    try {
+      following = (await _client
+              .from('friendships')
+              .select('id')
+              .eq('user_id', _uid)
+              .eq('status', 'accepted')
+              .count(CountOption.exact))
+          .count;
+    } catch (_) {}
+    try {
+      followers = (await _client
+              .from('friendships')
+              .select('id')
+              .eq('friend_id', _uid)
+              .eq('status', 'accepted')
+              .count(CountOption.exact))
+          .count;
+    } catch (_) {}
     if (mounted) {
       setState(() => _stats = (
             posts: posts,
             likesGot: likesGot,
             commentsGot: commentsGot,
             likesGiven: likesGiven,
+            following: following,
+            followers: followers,
           ));
     }
   }
@@ -110,7 +145,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     try {
       final data = await _client
           .from('posts')
-          .select('id, text, image_url, video_url, created_at, likes(count)')
+          .select('id, user_id, text, image_url, video_url, created_at, likes(count)')
           .eq('user_id', _uid)
           .order('created_at', ascending: false);
       if (mounted) {
@@ -120,7 +155,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       try {
         final data = await _client
             .from('posts')
-            .select('id, text, image_url, video_url, created_at')
+            .select('id, user_id, text, image_url, video_url, created_at')
             .eq('user_id', _uid)
             .order('created_at', ascending: false);
         if (mounted) {
@@ -135,7 +170,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       final data = await _client
           .from('likes')
           .select(
-              'posts(id, text, image_url, video_url, created_at, likes(count), profiles!posts_user_id_fkey(username, avatar_url))')
+              'posts(id, user_id, text, image_url, video_url, created_at, likes(count), profiles!posts_user_id_fkey(username, avatar_url))')
           .eq('user_id', _uid)
           .order('created_at', ascending: false);
       if (mounted) {
@@ -311,7 +346,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
               ],
               const SizedBox(height: 14),
               Text(
-                '${_stats.posts} Постов  |  ${_stats.likesGot} Лайков  |  0 Подписок  |  0 Подписчиков',
+                '${_stats.posts} Постов  |  ${_stats.likesGot} Лайков  |  ${_stats.following} Подписок  |  ${_stats.followers} Подписчиков',
                 style: TextStyle(fontSize: 13, color: muted),
               ),
               const SizedBox(height: 10),
@@ -327,15 +362,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
               Expanded(
                 child: TabBarView(
                   children: [
-                    _PostsGrid(
+                    PostsGrid(
                       posts: _myPosts,
                       emptyText: 'У вас пока нет постов',
-                      onOpen: _openPost,
                     ),
-                    _PostsGrid(
+                    PostsGrid(
                       posts: _likedPosts,
                       emptyText: 'Вам пока ничего не понравилось',
-                      onOpen: _openPost,
                     ),
                   ],
                 ),
@@ -344,108 +377,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
           ),
         ),
       ),
-    );
-  }
-
-  void _openPost(Map<String, dynamic> post) {
-    Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => PostViewScreen(post: post)),
-    );
-  }
-}
-
-class _PostsGrid extends StatelessWidget {
-  const _PostsGrid({
-    required this.posts,
-    required this.emptyText,
-    required this.onOpen,
-  });
-
-  final List<Map<String, dynamic>>? posts;
-  final String emptyText;
-  final ValueChanged<Map<String, dynamic>> onOpen;
-
-  int _likesCount(Map<String, dynamic> post) {
-    final likes = post['likes'];
-    if (likes is List && likes.isNotEmpty && likes.first is Map) {
-      return (likes.first['count'] as num?)?.toInt() ?? 0;
-    }
-    return 0;
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final muted = Theme.of(context)
-        .textTheme
-        .bodyMedium
-        ?.color
-        ?.withValues(alpha: 0.5);
-
-    if (posts == null) {
-      return const Center(child: CircularProgressIndicator());
-    }
-    if (posts!.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.grid_on_outlined, size: 36, color: muted),
-            const SizedBox(height: 10),
-            Text(emptyText, style: TextStyle(color: muted)),
-          ],
-        ),
-      );
-    }
-    return GridView.builder(
-      padding: const EdgeInsets.all(2),
-      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 3,
-        mainAxisSpacing: 2,
-        crossAxisSpacing: 2,
-      ),
-      itemCount: posts!.length,
-      itemBuilder: (context, i) {
-        final post = posts![i];
-        final imageUrl = post['image_url'] as String?;
-        final videoUrl = post['video_url'] as String?;
-
-        Widget cell;
-        if (imageUrl != null) {
-          cell = Image.network(imageUrl, fit: BoxFit.cover);
-        } else if (videoUrl != null) {
-          cell = Container(
-            color: Colors.black87,
-            padding: const EdgeInsets.all(8),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                const Icon(Icons.play_arrow, color: Colors.white, size: 28),
-                const SizedBox(height: 4),
-                Text(
-                  '▶ ${_likesCount(post)}',
-                  style: const TextStyle(color: Colors.white, fontSize: 12),
-                ),
-              ],
-            ),
-          );
-        } else {
-          cell = Container(
-            color: AppColors.coral.withValues(alpha: 0.08),
-            padding: const EdgeInsets.all(10),
-            child: Text(
-              post['text'] as String? ?? '',
-              maxLines: 6,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontSize: 12),
-            ),
-          );
-        }
-
-        return GestureDetector(
-          onTap: () => onOpen(post),
-          child: ClipRect(child: cell),
-        );
-      },
     );
   }
 }

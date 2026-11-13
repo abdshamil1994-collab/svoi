@@ -120,7 +120,7 @@ class _CreatePostScreenState extends State<CreatePostScreen> {
             'image_url': imageUrl,
             'video_url': videoUrl,
           })
-          .select('id, text, image_url, video_url, created_at')
+          .select('id, user_id, text, image_url, video_url, created_at')
           .single();
     } catch (_) {
       if (mounted) {

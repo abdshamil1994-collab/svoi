@@ -2,6 +2,7 @@ import 'package:material_ui/material_ui.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'app_theme.dart';
+import 'friends_screen.dart';
 import 'menu_screens.dart';
 import 'settings_screens.dart';
 
@@ -121,6 +122,10 @@ class ProfileDrawer extends StatelessWidget {
               title: const Text('👥 Пригласить друзей'),
               onTap: () =>
                   _stub(context, 'Приглашение друзей появится скоро'),
+            ),
+            ListTile(
+              title: const Text('🧡 Мои друзья'),
+              onTap: () => _open(context, const FriendsScreen()),
             ),
             ListTile(
               title: const Text('ℹ️ О приложении'),

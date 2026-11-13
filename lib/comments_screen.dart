@@ -3,6 +3,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'app_theme.dart';
 import 'feed_screen.dart' show timeAgo;
+import 'user_profile_screen.dart';
 
 class CommentsScreen extends StatefulWidget {
   const CommentsScreen({super.key, required this.postId});
@@ -46,7 +47,7 @@ class _CommentsScreenState extends State<CommentsScreen> {
     try {
       final data = await _client
           .from('comments')
-          .select('id, text, created_at, profiles(username, avatar_url)')
+          .select('id, user_id, text, created_at, profiles(username, avatar_url)')
           .eq('post_id', widget.postId)
           .order('created_at');
       if (mounted) {
@@ -65,7 +66,7 @@ class _CommentsScreenState extends State<CommentsScreen> {
     try {
       final data = await _client
           .from('comments')
-          .select('id, text, created_at, profiles(username, avatar_url)')
+          .select('id, user_id, text, created_at, profiles(username, avatar_url)')
           .eq('post_id', widget.postId)
           .order('created_at');
       if (mounted) {
@@ -224,8 +225,18 @@ class _CommentsScreenState extends State<CommentsScreen> {
         final c = comments[i];
         final profile = c['profiles'] as Map<String, dynamic>?;
         final avatarUrl = profile?['avatar_url'] as String?;
+        final authorId = c['user_id'] as String?;
         final createdAt = DateTime.tryParse(c['created_at'] as String? ?? '');
-        return Row(
+        return GestureDetector(
+          onTap: authorId == null
+              ? null
+              : () => Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => UserProfileScreen(userId: authorId),
+                    ),
+                  ),
+          behavior: HitTestBehavior.opaque,
+          child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             CircleAvatar(
@@ -271,6 +282,7 @@ class _CommentsScreenState extends State<CommentsScreen> {
               ),
             ),
           ],
+          ),
         );
       },
     );

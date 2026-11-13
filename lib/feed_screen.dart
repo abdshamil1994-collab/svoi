@@ -4,6 +4,8 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'app_theme.dart';
 import 'comments_screen.dart';
 import 'create_post_screen.dart';
+import 'stories_bar.dart';
+import 'user_profile_screen.dart';
 import 'video_player_screen.dart';
 
 String timeAgo(DateTime time) {
@@ -25,7 +27,9 @@ class FeedScreen extends StatefulWidget {
 
 class _FeedScreenState extends State<FeedScreen> {
   List<Map<String, dynamic>>? _posts;
+  List<Map<String, dynamic>>? _friendPosts;
   bool _loadFailed = false;
+  bool _friendsFailed = false;
   Set<String> _myLikes = {};
 
   SupabaseClient get _client => Supabase.instance.client;
@@ -34,6 +38,7 @@ class _FeedScreenState extends State<FeedScreen> {
   void initState() {
     super.initState();
     _load();
+    _loadFriendsFeed();
   }
 
   Future<void> _load() async {
@@ -47,6 +52,20 @@ class _FeedScreenState extends State<FeedScreen> {
       }
     } catch (_) {
       if (mounted) setState(() => _loadFailed = true);
+    }
+  }
+
+  Future<void> _loadFriendsFeed() async {
+    try {
+      final posts = await _loadFriendPosts();
+      if (mounted) {
+        setState(() {
+          _friendPosts = posts;
+          _friendsFailed = false;
+        });
+      }
+    } catch (_) {
+      if (mounted) setState(() => _friendsFailed = true);
     }
   }
 
@@ -77,22 +96,12 @@ class _FeedScreenState extends State<FeedScreen> {
     final data = await _client
         .from('posts')
         .select(
-          'id, text, image_url, video_url, created_at, '
+          'id, user_id, text, image_url, video_url, created_at, '
           'profiles!posts_user_id_fkey(username, avatar_url), likes(count), comments(count)',
         )
         .order('created_at', ascending: false)
         .limit(50);
-
-    final uid = _client.auth.currentUser?.id;
-    if (uid != null) {
-      final mine = await _client
-          .from('likes')
-          .select('post_id')
-          .eq('user_id', uid);
-      _myLikes = {
-        for (final row in mine as List) row['post_id'] as String,
-      };
-    }
+    await _loadMyLikes();
     return List<Map<String, dynamic>>.from(data);
   }
 
@@ -100,11 +109,59 @@ class _FeedScreenState extends State<FeedScreen> {
     _myLikes = {};
     final data = await _client
         .from('posts')
-        .select('id, text, image_url, video_url, created_at, '
+        .select('id, user_id, text, image_url, video_url, created_at, '
             'profiles!posts_user_id_fkey(username, avatar_url)')
         .order('created_at', ascending: false)
         .limit(50);
     return List<Map<String, dynamic>>.from(data);
+  }
+
+  Future<void> _loadMyLikes() async {
+    final uid = _client.auth.currentUser?.id;
+    if (uid == null) return;
+    try {
+      final mine =
+          await _client.from('likes').select('post_id').eq('user_id', uid);
+      _myLikes = {for (final row in mine as List) row['post_id'] as String};
+    } catch (_) {
+      _myLikes = {};
+    }
+  }
+
+  Future<List<Map<String, dynamic>>> _loadFriendPosts() async {
+    final uid = _client.auth.currentUser!.id;
+    final friendships = await _client
+        .from('friendships')
+        .select('user_id, friend_id')
+        .eq('status', 'accepted')
+        .or('user_id.eq.$uid,friend_id.eq.$uid');
+    final friendIds = {
+      for (final row in friendships as List)
+        (row['user_id'] == uid ? row['friend_id'] : row['user_id']) as String,
+    };
+    if (friendIds.isEmpty) return [];
+
+    try {
+      final data = await _client
+          .from('posts')
+          .select(
+            'id, user_id, text, image_url, video_url, created_at, '
+            'profiles!posts_user_id_fkey(username, avatar_url), likes(count), comments(count)',
+          )
+          .inFilter('user_id', friendIds.toList())
+          .order('created_at', ascending: false)
+          .limit(50);
+      return List<Map<String, dynamic>>.from(data);
+    } on PostgrestException {
+      final data = await _client
+          .from('posts')
+          .select('id, user_id, text, image_url, video_url, created_at, '
+              'profiles!posts_user_id_fkey(username, avatar_url)')
+          .inFilter('user_id', friendIds.toList())
+          .order('created_at', ascending: false)
+          .limit(50);
+      return List<Map<String, dynamic>>.from(data);
+    }
   }
 
   Future<void> _createPost() async {
@@ -129,64 +186,96 @@ class _FeedScreenState extends State<FeedScreen> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
 
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Лента'),
-        centerTitle: true,
-        backgroundColor: theme.scaffoldBackgroundColor,
-        elevation: 0,
-      ),
-      body: _buildBody(theme),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _createPost,
-        backgroundColor: AppColors.coral,
-        child: const Icon(Icons.add, color: Colors.white),
+    return DefaultTabController(
+      length: 2,
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text('Лента'),
+          centerTitle: true,
+          backgroundColor: theme.scaffoldBackgroundColor,
+          elevation: 0,
+        ),
+        body: Column(
+          children: [
+            const StoriesBar(),
+            TabBar(
+              labelColor: theme.textTheme.bodyLarge?.color,
+              unselectedLabelColor: theme.textTheme.bodyMedium?.color
+                  ?.withValues(alpha: 0.5),
+              indicatorColor: AppColors.coral,
+              tabs: const [
+                Tab(text: 'Все'),
+                Tab(text: 'Друзья'),
+              ],
+            ),
+            Expanded(
+              child: TabBarView(
+                children: [
+                  _buildPostsList(
+                    posts: _posts,
+                    failed: _loadFailed,
+                    emptyText: 'Пока пусто. Нажмите + и создайте первый пост',
+                    onRetry: () {
+                      setState(() => _loadFailed = false);
+                      _load();
+                    },
+                    onRefresh: _load,
+                  ),
+                  _buildPostsList(
+                    posts: _friendPosts,
+                    failed: _friendsFailed,
+                    emptyText: 'Здесь появятся посты ваших друзей',
+                    onRetry: () {
+                      setState(() => _friendsFailed = false);
+                      _loadFriendsFeed();
+                    },
+                    onRefresh: _loadFriendsFeed,
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        floatingActionButton: FloatingActionButton(
+          onPressed: _createPost,
+          backgroundColor: AppColors.coral,
+          child: const Icon(Icons.add, color: Colors.white),
+        ),
       ),
     );
   }
 
-  Widget _buildBody(ThemeData theme) {
-    if (_loadFailed && _posts == null) {
+  Widget _buildPostsList({
+    required List<Map<String, dynamic>>? posts,
+    required bool failed,
+    required String emptyText,
+    required VoidCallback onRetry,
+    required Future<void> Function() onRefresh,
+  }) {
+    final theme = Theme.of(context);
+    final muted = theme.textTheme.bodyMedium?.color?.withValues(alpha: 0.55);
+
+    if (failed && posts == null) {
       return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Text(
-              'Не удалось загрузить ленту',
-              style: TextStyle(
-                color:
-                    theme.textTheme.bodyMedium?.color?.withValues(alpha: 0.55),
-              ),
-            ),
+            Text('Не удалось загрузить ленту',
+                style: TextStyle(color: muted)),
             const SizedBox(height: 12),
-            TextButton(
-              onPressed: () {
-                setState(() => _loadFailed = false);
-                _load();
-              },
-              child: const Text('Повторить'),
-            ),
+            TextButton(onPressed: onRetry, child: const Text('Повторить')),
           ],
         ),
       );
     }
-
-    final posts = _posts;
     if (posts == null) {
       return const Center(child: CircularProgressIndicator());
     }
     if (posts.isEmpty) {
-      return Center(
-        child: Text(
-          'Пока пусто. Нажмите + и создайте первый пост',
-          style: TextStyle(
-            color: theme.textTheme.bodyMedium?.color?.withValues(alpha: 0.55),
-          ),
-        ),
-      );
+      return Center(child: Text(emptyText, style: TextStyle(color: muted)));
     }
     return RefreshIndicator(
-      onRefresh: _load,
+      onRefresh: onRefresh,
       child: ListView.separated(
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 96),
         itemCount: posts.length,
@@ -281,6 +370,14 @@ class _PostCardState extends State<PostCard> {
     );
   }
 
+  void _openAuthor() {
+    final authorId = widget.post['user_id'] as String?;
+    if (authorId == null) return;
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => UserProfileScreen(userId: authorId)),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -314,36 +411,40 @@ class _PostCardState extends State<PostCard> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              CircleAvatar(
-                radius: 20,
-                backgroundColor: AppColors.coral.withValues(alpha: 0.12),
-                backgroundImage:
-                    avatarUrl != null ? NetworkImage(avatarUrl) : null,
-                child: avatarUrl == null
-                    ? const Icon(Icons.person_outline,
-                        size: 20, color: AppColors.coral)
-                    : null,
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      username,
-                      style: const TextStyle(fontWeight: FontWeight.w600),
-                    ),
-                    if (createdAt != null)
-                      Text(
-                        timeAgo(createdAt),
-                        style: TextStyle(fontSize: 12, color: mutedColor),
-                      ),
-                  ],
+          GestureDetector(
+            onTap: _openAuthor,
+            behavior: HitTestBehavior.opaque,
+            child: Row(
+              children: [
+                CircleAvatar(
+                  radius: 20,
+                  backgroundColor: AppColors.coral.withValues(alpha: 0.12),
+                  backgroundImage:
+                      avatarUrl != null ? NetworkImage(avatarUrl) : null,
+                  child: avatarUrl == null
+                      ? const Icon(Icons.person_outline,
+                          size: 20, color: AppColors.coral)
+                      : null,
                 ),
-              ),
-            ],
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        username,
+                        style: const TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                      if (createdAt != null)
+                        Text(
+                          timeAgo(createdAt),
+                          style: TextStyle(fontSize: 12, color: mutedColor),
+                        ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
           ),
           const SizedBox(height: 8),
           Container(
