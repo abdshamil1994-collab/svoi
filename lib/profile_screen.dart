@@ -59,7 +59,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     try {
       final row = await _client
           .from('profiles')
-          .select('username, avatar_url, bio')
+          .select('username, avatar_url, bio, status, status_emoji')
           .eq('id', _uid)
           .maybeSingle();
       if (mounted) setState(() => _profile = row);
@@ -258,6 +258,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final theme = Theme.of(context);
     final username = _profile?['username'] as String? ?? '';
     final bio = _profile?['bio'] as String? ?? '';
+    final status = _profile?['status'] as String? ?? '';
+    final statusEmoji = _profile?['status_emoji'] as String? ?? '';
     final avatarUrl = _profile?['avatar_url'] as String?;
     final muted = theme.textTheme.bodyMedium?.color?.withValues(alpha: 0.5);
 
@@ -341,6 +343,21 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     bio,
                     textAlign: TextAlign.center,
                     style: const TextStyle(fontSize: 14),
+                  ),
+                ),
+              ],
+              if (status.isNotEmpty) ...[
+                const SizedBox(height: 8),
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+                  decoration: BoxDecoration(
+                    color: AppColors.coral.withValues(alpha: 0.08),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(
+                    '$statusEmoji $status'.trim(),
+                    style: const TextStyle(fontSize: 13),
                   ),
                 ),
               ],

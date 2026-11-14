@@ -18,6 +18,7 @@ class _FriendsScreenState extends State<FriendsScreen> {
   List<Map<String, dynamic>> _requests = [];
   List<Map<String, dynamic>> _friends = [];
   Set<String> _pendingOut = {};
+  Set<String> _friendIds = {};
   bool _searching = false;
   bool _dataFailed = false;
 
@@ -76,6 +77,9 @@ class _FriendsScreenState extends State<FriendsScreen> {
           _requests = requests;
           _friends = friends;
           _pendingOut = pendingOut;
+          _friendIds = {
+            for (final f in friends) f['other_id'] as String,
+          };
           _dataFailed = false;
         });
       }
@@ -203,13 +207,16 @@ class _FriendsScreenState extends State<FriendsScreen> {
                 avatarUrl: user['avatar_url'] as String?,
                 username: user['username'] as String? ?? '',
                 onTap: () => _openUser(user['id'] as String),
-                trailing: _pendingOut.contains(user['id'])
-                    ? Text('Заявка отправлена',
+                trailing: _friendIds.contains(user['id'])
+                    ? Text('В друзьях',
                         style: TextStyle(fontSize: 12, color: muted))
-                    : TextButton(
-                        onPressed: () => _addFriend(user['id'] as String),
-                        child: const Text('Добавить'),
-                      ),
+                    : _pendingOut.contains(user['id'])
+                        ? Text('Заявка отправлена',
+                            style: TextStyle(fontSize: 12, color: muted))
+                        : TextButton(
+                            onPressed: () => _addFriend(user['id'] as String),
+                            child: const Text('Добавить'),
+                          ),
               ),
             const SizedBox(height: 16),
           ],

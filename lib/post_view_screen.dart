@@ -31,6 +31,7 @@ class PostViewScreen extends StatelessWidget {
           likesCount: _countOf('likes'),
           commentsCount: _countOf('comments'),
           liked: false,
+          inDetail: true,
         ),
       ),
     );

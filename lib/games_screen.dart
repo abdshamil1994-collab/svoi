@@ -1,6 +1,7 @@
 import 'package:material_ui/material_ui.dart';
 
 import 'app_theme.dart';
+import 'party_games.dart';
 import 'tictactoe_screen.dart';
 
 class GamesScreen extends StatelessWidget {
@@ -30,8 +31,29 @@ class GamesScreen extends StatelessWidget {
               MaterialPageRoute(builder: (_) => const TicTacToeScreen()),
             ),
           ),
+          _GameCard(
+            emoji: '❓',
+            title: 'Случайный вопрос',
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const RandomQuestionScreen()),
+            ),
+          ),
+          _GameCard(
+            emoji: '🏁',
+            title: 'Кто первый?',
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const WhoFirstScreen()),
+            ),
+          ),
+          _GameCard(
+            emoji: '🎲',
+            title: 'Бросить кубик',
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const DiceScreen()),
+            ),
+          ),
           const _GameCard(emoji: '🏙️', title: 'Города', soon: true),
-          const _GameCard(emoji: '❓', title: 'Викторина', soon: true),
+          const _GameCard(emoji: '🧠', title: 'Викторина', soon: true),
           const _GameCard(emoji: '🎭', title: 'Правда или действие', soon: true),
         ],
       ),

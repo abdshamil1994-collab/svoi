@@ -1,8 +1,12 @@
+import 'dart:async';
+
 import 'package:material_ui/material_ui.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'app_theme.dart';
 import 'feed_screen.dart' show timeAgo;
+import 'notifications.dart';
+import 'presence.dart';
 
 class ChatScreen extends StatefulWidget {
   const ChatScreen({
@@ -26,6 +30,13 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _loading = true;
   bool _sending = false;
   RealtimeChannel? _channel;
+  RealtimeChannel? _typingChannel;
+  Timer? _pollTimer;
+  Timer? _presenceTimer;
+  Timer? _typingHideTimer;
+  DateTime? _peerLastSeen;
+  bool _peerTyping = false;
+  DateTime _lastTypingSent = DateTime.fromMillisecondsSinceEpoch(0);
 
   SupabaseClient get _client => Supabase.instance.client;
   String get _uid => _client.auth.currentUser!.id;
@@ -35,12 +46,23 @@ class _ChatScreenState extends State<ChatScreen> {
     super.initState();
     _load();
     _subscribe();
+    _subscribeTyping();
+    _loadPeerPresence();
+    // Фолбэк, если realtime нестабилен: опрос каждые 3 секунды.
+    _pollTimer = Timer.periodic(
+        const Duration(seconds: 3), (_) => _pollNewMessages());
+    _presenceTimer = Timer.periodic(
+        const Duration(seconds: 15), (_) => _loadPeerPresence());
   }
 
   @override
   void dispose() {
     _inputController.dispose();
+    _pollTimer?.cancel();
+    _presenceTimer?.cancel();
+    _typingHideTimer?.cancel();
     if (_channel != null) _client.removeChannel(_channel!);
+    if (_typingChannel != null) _client.removeChannel(_typingChannel!);
     super.dispose();
   }
 
@@ -48,7 +70,7 @@ class _ChatScreenState extends State<ChatScreen> {
     try {
       final data = await _client
           .from('messages')
-          .select('id, sender_id, text, created_at')
+          .select('id, sender_id, text, read, created_at')
           .or('and(sender_id.eq.$_uid,receiver_id.eq.${widget.peerId}),'
               'and(sender_id.eq.${widget.peerId},receiver_id.eq.$_uid)')
           .order('created_at');
@@ -64,6 +86,31 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
+  Future<void> _pollNewMessages() async {
+    try {
+      final data = await _client
+          .from('messages')
+          .select('id, sender_id, text, read, created_at')
+          .or('and(sender_id.eq.$_uid,receiver_id.eq.${widget.peerId}),'
+              'and(sender_id.eq.${widget.peerId},receiver_id.eq.$_uid)')
+          .order('created_at');
+      if (!mounted) return;
+      final fresh = List<Map<String, dynamic>>.from(data);
+      if (fresh.length != _messages.length ||
+          (fresh.isNotEmpty &&
+              _messages.isNotEmpty &&
+              fresh.last['id'] != _messages.last['id']) ||
+          fresh.any((m) =>
+              m['sender_id'] == _uid &&
+              m['read'] !=
+                  _messages.firstWhere((x) => x['id'] == m['id'],
+                      orElse: () => const {})['read'])) {
+        setState(() => _messages = fresh);
+        _markRead();
+      }
+    } catch (_) {}
+  }
+
   Future<void> _markRead() async {
     try {
       await _client
@@ -72,6 +119,20 @@ class _ChatScreenState extends State<ChatScreen> {
           .eq('sender_id', widget.peerId)
           .eq('receiver_id', _uid)
           .eq('read', false);
+    } catch (_) {}
+  }
+
+  Future<void> _loadPeerPresence() async {
+    try {
+      final row = await _client
+          .from('profiles')
+          .select('last_seen')
+          .eq('id', widget.peerId)
+          .maybeSingle();
+      if (mounted) {
+        setState(() => _peerLastSeen =
+            DateTime.tryParse(row?['last_seen'] as String? ?? ''));
+      }
     } catch (_) {}
   }
 
@@ -87,13 +148,48 @@ class _ChatScreenState extends State<ChatScreen> {
             final pair = {row['sender_id'], row['receiver_id']};
             if (pair.contains(_uid) && pair.contains(widget.peerId)) {
               if (mounted) {
-                setState(() => _messages.add(Map<String, dynamic>.from(row)));
+                setState(() {
+                  if (!_messages.any((m) => m['id'] == row['id'])) {
+                    _messages.add(Map<String, dynamic>.from(row));
+                  }
+                });
                 _markRead();
               }
             }
           },
         )
         .subscribe();
+  }
+
+  void _subscribeTyping() {
+    final ids = [_uid, widget.peerId]..sort();
+    _typingChannel = _client
+        .channel('typing_${ids.join('_')}')
+        .onBroadcast(
+          event: 'typing',
+          callback: (payload) {
+            if (payload['user_id'] == widget.peerId && mounted) {
+              setState(() => _peerTyping = true);
+              _typingHideTimer?.cancel();
+              _typingHideTimer = Timer(const Duration(seconds: 3), () {
+                if (mounted) setState(() => _peerTyping = false);
+              });
+            }
+          },
+        )
+        .subscribe();
+  }
+
+  void _onTextChanged(String _) {
+    final now = DateTime.now();
+    if (now.difference(_lastTypingSent).inSeconds < 2) return;
+    _lastTypingSent = now;
+    try {
+      _typingChannel?.sendBroadcastMessage(
+        event: 'typing',
+        payload: {'user_id': _uid},
+      );
+    } catch (_) {}
   }
 
   Future<void> _send() async {
@@ -108,12 +204,12 @@ class _ChatScreenState extends State<ChatScreen> {
             'receiver_id': widget.peerId,
             'text': text,
           })
-          .select('id, sender_id, text, created_at')
+          .select('id, sender_id, text, read, created_at')
           .single();
+      sendNotification(userId: widget.peerId, type: 'message');
       if (mounted) {
         _inputController.clear();
         setState(() {
-          // Добавляем локально, если realtime ещё не прислал это же сообщение.
           if (!_messages.any((m) => m['id'] == row['id'])) {
             _messages.add(Map<String, dynamic>.from(row));
           }
@@ -135,6 +231,7 @@ class _ChatScreenState extends State<ChatScreen> {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
     final muted = theme.textTheme.bodyMedium?.color?.withValues(alpha: 0.5);
+    final peerOnline = isOnline(_peerLastSeen);
 
     return Scaffold(
       appBar: AppBar(
@@ -154,7 +251,29 @@ class _ChatScreenState extends State<ChatScreen> {
                   : null,
             ),
             const SizedBox(width: 10),
-            Text(widget.peerName),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(widget.peerName,
+                      style: const TextStyle(fontSize: 16),
+                      overflow: TextOverflow.ellipsis),
+                  Text(
+                    _peerTyping
+                        ? 'пишет...'
+                        : presenceText(_peerLastSeen),
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: _peerTyping
+                          ? AppColors.coral
+                          : (peerOnline ? Colors.green : muted),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            if (peerOnline && !_peerTyping)
+              const CircleAvatar(radius: 4, backgroundColor: Colors.green),
           ],
         ),
       ),
@@ -176,6 +295,7 @@ class _ChatScreenState extends State<ChatScreen> {
                           final mine = m['sender_id'] == _uid;
                           final time = DateTime.tryParse(
                               m['created_at'] as String? ?? '');
+                          final read = m['read'] == true;
                           return Align(
                             alignment: mine
                                 ? Alignment.centerRight
@@ -217,16 +337,39 @@ class _ChatScreenState extends State<ChatScreen> {
                                       color: mine ? Colors.white : null,
                                     ),
                                   ),
-                                  if (time != null)
-                                    Text(
-                                      timeAgo(time),
-                                      style: TextStyle(
-                                        fontSize: 10,
-                                        color: mine
-                                            ? Colors.white70
-                                            : muted,
-                                      ),
-                                    ),
+                                  const SizedBox(height: 2),
+                                  Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      if (time != null)
+                                        Text(
+                                          timeAgo(time),
+                                          style: TextStyle(
+                                            fontSize: 10,
+                                            color: mine
+                                                ? Colors.white70
+                                                : muted,
+                                          ),
+                                        ),
+                                      if (mine) ...[
+                                        const SizedBox(width: 4),
+                                        Text(
+                                          read
+                                              ? '✓✓'
+                                              : (peerOnline ? '✓✓' : '✓'),
+                                          style: TextStyle(
+                                            fontSize: 10,
+                                            fontWeight: FontWeight.w700,
+                                            color: read
+                                                ? Colors.white
+                                                : (peerOnline
+                                                    ? Colors.white70
+                                                    : Colors.white54),
+                                          ),
+                                        ),
+                                      ],
+                                    ],
+                                  ),
                                 ],
                               ),
                             ),
@@ -245,6 +388,7 @@ class _ChatScreenState extends State<ChatScreen> {
                       controller: _inputController,
                       decoration:
                           const InputDecoration(hintText: 'Сообщение...'),
+                      onChanged: _onTextChanged,
                       onSubmitted: (_) => _send(),
                     ),
                   ),

@@ -3,21 +3,31 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'app_theme.dart';
 import 'comments_screen.dart';
-import 'create_post_screen.dart';
 import 'edit_post_screen.dart';
 import 'notifications.dart';
 import 'notifications_screen.dart';
+import 'post_view_screen.dart';
+import 'statuses_bar.dart';
 import 'stories_bar.dart';
 import 'user_profile_screen.dart';
 import 'video_player_screen.dart';
 
 String timeAgo(DateTime time) {
-  final diff = DateTime.now().difference(time.toLocal());
+  final t = time.toLocal();
+  final now = DateTime.now();
+  final diff = now.difference(t);
   if (diff.inMinutes < 1) return 'только что';
   if (diff.inMinutes < 60) return '${diff.inMinutes} мин назад';
-  if (diff.inHours < 24) return '${diff.inHours} ч назад';
+  if (diff.inHours < 24 && t.day == now.day) return '${diff.inHours} ч назад';
+  final hm =
+      '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
+  final yesterday = now.subtract(const Duration(days: 1));
+  if (t.day == yesterday.day &&
+      t.month == yesterday.month &&
+      t.year == yesterday.year) {
+    return 'вчера в $hm';
+  }
   if (diff.inDays < 7) return '${diff.inDays} дн назад';
-  final t = time.toLocal();
   return '${t.day.toString().padLeft(2, '0')}.${t.month.toString().padLeft(2, '0')}.${t.year}';
 }
 
@@ -35,6 +45,7 @@ class _FeedScreenState extends State<FeedScreen> {
   bool _friendsFailed = false;
   Set<String> _myLikes = {};
   int _unreadNotifications = 0;
+  RealtimeChannel? _notificationsChannel;
 
   SupabaseClient get _client => Supabase.instance.client;
 
@@ -44,6 +55,34 @@ class _FeedScreenState extends State<FeedScreen> {
     _load();
     _loadFriendsFeed();
     _loadUnread();
+    _subscribeNotifications();
+  }
+
+  @override
+  void dispose() {
+    if (_notificationsChannel != null) {
+      _client.removeChannel(_notificationsChannel!);
+    }
+    super.dispose();
+  }
+
+  void _subscribeNotifications() {
+    final uid = _client.auth.currentUser?.id;
+    if (uid == null) return;
+    _notificationsChannel = _client
+        .channel('notifications_bell_$uid')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.insert,
+          schema: 'public',
+          table: 'notifications',
+          filter: PostgresChangeFilter(
+            type: PostgresChangeFilterType.eq,
+            column: 'user_id',
+            value: uid,
+          ),
+          callback: (_) => _loadUnread(),
+        )
+        .subscribe();
   }
 
   Future<void> _loadUnread() async {
@@ -188,16 +227,6 @@ class _FeedScreenState extends State<FeedScreen> {
     }
   }
 
-  Future<void> _createPost() async {
-    final newPost = await Navigator.of(context).push<Map<String, dynamic>>(
-      MaterialPageRoute(builder: (_) => const CreatePostScreen()),
-    );
-    if (newPost == null || !mounted) return;
-    // Оптимистично добавляем пост в начало списка, затем тихо догружаем ленту.
-    setState(() => _posts = [newPost, ...?_posts]);
-    _refreshQuietly();
-  }
-
   int _countOf(Map<String, dynamic> post, String key) {
     final value = post[key];
     if (value is List && value.isNotEmpty && value.first is Map) {
@@ -233,6 +262,7 @@ class _FeedScreenState extends State<FeedScreen> {
         body: Column(
           children: [
             const StoriesBar(),
+            const StatusesBar(),
             TabBar(
               labelColor: theme.textTheme.bodyLarge?.color,
               unselectedLabelColor: theme.textTheme.bodyMedium?.color
@@ -270,11 +300,6 @@ class _FeedScreenState extends State<FeedScreen> {
               ),
             ),
           ],
-        ),
-        floatingActionButton: FloatingActionButton(
-          onPressed: _createPost,
-          backgroundColor: AppColors.coral,
-          child: const Icon(Icons.add, color: Colors.white),
         ),
       ),
     );
@@ -346,6 +371,7 @@ class PostCard extends StatefulWidget {
     required this.liked,
     this.onChanged,
     this.onDeleted,
+    this.inDetail = false,
   });
 
   final Map<String, dynamic> post;
@@ -355,21 +381,40 @@ class PostCard extends StatefulWidget {
   final VoidCallback? onChanged;
   final ValueChanged<Map<String, dynamic>>? onDeleted;
 
+  /// true на экране полного просмотра — повторный переход не нужен.
+  final bool inDetail;
+
   @override
   State<PostCard> createState() => _PostCardState();
 }
 
-class _PostCardState extends State<PostCard> {
+class _PostCardState extends State<PostCard>
+    with SingleTickerProviderStateMixin {
   late bool _liked = widget.liked;
   late int _likes = widget.likesCount;
+  late final AnimationController _likeCtrl = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 350),
+  );
+  late final Animation<double> _likeScale = TweenSequence<double>([
+    TweenSequenceItem(tween: Tween(begin: 1.0, end: 1.35), weight: 50),
+    TweenSequenceItem(tween: Tween(begin: 1.35, end: 1.0), weight: 50),
+  ]).animate(CurvedAnimation(parent: _likeCtrl, curve: Curves.easeOut));
 
   SupabaseClient get _client => Supabase.instance.client;
+
+  @override
+  void dispose() {
+    _likeCtrl.dispose();
+    super.dispose();
+  }
 
   Future<void> _toggleLike() async {
     final uid = _client.auth.currentUser!.id;
     final postId = widget.post['id'] as String?;
 
-    // Оптимистичное переключение, запрос уходит в фоне.
+    // Оптимистичное переключение + лёгкая анимация сердца.
+    _likeCtrl.forward(from: 0);
     setState(() {
       _liked = !_liked;
       _likes += _liked ? 1 : -1;
@@ -410,8 +455,13 @@ class _PostCardState extends State<PostCard> {
   Future<void> _openComments() async {
     final postId = widget.post['id'] as String?;
     if (postId == null) return;
-    await Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => CommentsScreen(postId: postId)),
+    await showCommentsSheet(context, postId);
+  }
+
+  void _openDetail() {
+    if (widget.inDetail) return;
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => PostViewScreen(post: widget.post)),
     );
   }
 
@@ -574,15 +624,22 @@ class _PostCardState extends State<PostCard> {
             ),
           ),
           const SizedBox(height: 10),
-          Text(text),
+          GestureDetector(
+            onTap: _openDetail,
+            behavior: HitTestBehavior.opaque,
+            child: Text(text),
+          ),
           if (imageUrl != null) ...[
             const SizedBox(height: 10),
-            ClipRRect(
-              borderRadius: BorderRadius.circular(12),
-              child: Image.network(
-                imageUrl,
-                fit: BoxFit.cover,
-                width: double.infinity,
+            GestureDetector(
+              onTap: _openDetail,
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(12),
+                child: Image.network(
+                  imageUrl,
+                  fit: BoxFit.cover,
+                  width: double.infinity,
+                ),
               ),
             ),
           ],
@@ -612,9 +669,12 @@ class _PostCardState extends State<PostCard> {
             children: [
               IconButton(
                 onPressed: _toggleLike,
-                icon: Icon(
-                  _liked ? Icons.favorite : Icons.favorite_border,
-                  color: _liked ? AppColors.coral : mutedColor,
+                icon: ScaleTransition(
+                  scale: _likeScale,
+                  child: Icon(
+                    _liked ? Icons.favorite : Icons.favorite_border,
+                    color: _liked ? AppColors.coral : mutedColor,
+                  ),
                 ),
               ),
               Text('$_likes', style: TextStyle(color: mutedColor)),

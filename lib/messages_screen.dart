@@ -1,9 +1,70 @@
+import 'dart:async';
+
 import 'package:material_ui/material_ui.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'app_theme.dart';
 import 'chat_screen.dart';
 import 'feed_screen.dart' show timeAgo;
+import 'presence.dart';
+
+/// Общий счётчик непрочитанных сообщений — показывается бейджем
+/// на вкладке «Сообщения» в нижней навигации.
+final ValueNotifier<int> messagesUnread = ValueNotifier(0);
+
+/// Фоновая служба бейджа непрочитанных: realtime-подписка на входящие
+/// + периодический пересчёт. Запускается один раз при старте приложения.
+class MessagesBadgeService {
+  MessagesBadgeService._();
+
+  static final MessagesBadgeService instance = MessagesBadgeService._();
+  // ignore: unused_field — канал живёт всё время работы приложения.
+  RealtimeChannel? _channel;
+  // ignore: unused_field — таймер живёт всё время работы приложения.
+  Timer? _timer;
+  bool _started = false;
+
+  void start() {
+    if (_started) return;
+    _started = true;
+    refresh();
+    _timer = Timer.periodic(const Duration(seconds: 30), (_) => refresh());
+    try {
+      final client = Supabase.instance.client;
+      final uid = client.auth.currentUser?.id;
+      if (uid == null) return;
+      _channel = client
+          .channel('messages_badge')
+          .onPostgresChanges(
+            event: PostgresChangeEvent.insert,
+            schema: 'public',
+            table: 'messages',
+            filter: PostgresChangeFilter(
+              type: PostgresChangeFilterType.eq,
+              column: 'receiver_id',
+              value: uid,
+            ),
+            callback: (_) => refresh(),
+          )
+          .subscribe();
+    } catch (_) {}
+  }
+
+  Future<void> refresh() async {
+    try {
+      final client = Supabase.instance.client;
+      final uid = client.auth.currentUser?.id;
+      if (uid == null) return;
+      final res = await client
+          .from('messages')
+          .select('id')
+          .eq('receiver_id', uid)
+          .eq('read', false)
+          .count(CountOption.exact);
+      messagesUnread.value = res.count;
+    } catch (_) {}
+  }
+}
 
 class MessagesScreen extends StatefulWidget {
   const MessagesScreen({super.key});
@@ -15,6 +76,8 @@ class MessagesScreen extends StatefulWidget {
 class _MessagesScreenState extends State<MessagesScreen> {
   List<Map<String, dynamic>>? _dialogs;
   bool _failed = false;
+  RealtimeChannel? _channel;
+  Timer? _pollTimer;
 
   SupabaseClient get _client => Supabase.instance.client;
   String get _uid => _client.auth.currentUser!.id;
@@ -23,6 +86,33 @@ class _MessagesScreenState extends State<MessagesScreen> {
   void initState() {
     super.initState();
     _load();
+    _subscribe();
+    // Фолбэк: опрос каждые 3 секунды, пока экран открыт.
+    _pollTimer = Timer.periodic(const Duration(seconds: 3), (_) => _load());
+  }
+
+  @override
+  void dispose() {
+    _pollTimer?.cancel();
+    if (_channel != null) _client.removeChannel(_channel!);
+    super.dispose();
+  }
+
+  void _subscribe() {
+    _channel = _client
+        .channel('dialogs_$_uid')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.insert,
+          schema: 'public',
+          table: 'messages',
+          filter: PostgresChangeFilter(
+            type: PostgresChangeFilterType.eq,
+            column: 'receiver_id',
+            value: _uid,
+          ),
+          callback: (_) => _load(),
+        )
+        .subscribe();
   }
 
   Future<void> _load() async {
@@ -58,13 +148,14 @@ class _MessagesScreenState extends State<MessagesScreen> {
       if (byPeer.isNotEmpty) {
         final profiles = await _client
             .from('profiles')
-            .select('id, username, avatar_url')
+            .select('id, username, avatar_url, last_seen')
             .inFilter('id', byPeer.keys.toList());
         for (final p in profiles as List) {
           final entry = byPeer[p['id']];
           if (entry != null) {
             entry['username'] = p['username'];
             entry['avatar_url'] = p['avatar_url'];
+            entry['last_seen'] = p['last_seen'];
           }
         }
       }
@@ -78,7 +169,7 @@ class _MessagesScreenState extends State<MessagesScreen> {
         });
       }
     } catch (_) {
-      if (mounted) setState(() => _failed = true);
+      if (mounted && _dialogs == null) setState(() => _failed = true);
     }
   }
 
@@ -141,6 +232,8 @@ class _MessagesScreenState extends State<MessagesScreen> {
           final avatarUrl = d['avatar_url'] as String?;
           final time = DateTime.tryParse(d['last_time'] as String? ?? '');
           final unread = d['unread'] as int;
+          final online =
+              isOnline(DateTime.tryParse(d['last_seen'] as String? ?? ''));
 
           return ListTile(
             onTap: () async {
@@ -154,24 +247,44 @@ class _MessagesScreenState extends State<MessagesScreen> {
                 ),
               );
               _load();
+              MessagesBadgeService.instance.refresh();
             },
-            leading: CircleAvatar(
-              radius: 24,
-              backgroundColor: AppColors.coral.withValues(alpha: 0.12),
-              backgroundImage:
-                  avatarUrl != null ? NetworkImage(avatarUrl) : null,
-              child: avatarUrl == null
-                  ? const Icon(Icons.person_outline, color: AppColors.coral)
-                  : null,
+            leading: Stack(
+              children: [
+                CircleAvatar(
+                  radius: 24,
+                  backgroundColor: AppColors.coral.withValues(alpha: 0.12),
+                  backgroundImage:
+                      avatarUrl != null ? NetworkImage(avatarUrl) : null,
+                  child: avatarUrl == null
+                      ? const Icon(Icons.person_outline, color: AppColors.coral)
+                      : null,
+                ),
+                if (online)
+                  Positioned(
+                    right: 0,
+                    bottom: 0,
+                    child: Container(
+                      width: 12,
+                      height: 12,
+                      decoration: BoxDecoration(
+                        color: Colors.green,
+                        shape: BoxShape.circle,
+                        border: Border.all(color: Colors.white, width: 2),
+                      ),
+                    ),
+                  ),
+              ],
             ),
             title: Text(
               d['username'] as String? ?? 'без имени',
               style: const TextStyle(fontWeight: FontWeight.w600),
             ),
             subtitle: Text(
-              d['last_text'] as String? ?? '',
+              online ? 'в сети' : (d['last_text'] as String? ?? ''),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
+              style: online ? const TextStyle(color: Colors.green) : null,
             ),
             trailing: Column(
               mainAxisAlignment: MainAxisAlignment.center,

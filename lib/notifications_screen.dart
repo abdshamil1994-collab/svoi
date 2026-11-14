@@ -2,6 +2,7 @@ import 'package:material_ui/material_ui.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'app_theme.dart';
+import 'chat_screen.dart';
 import 'feed_screen.dart' show timeAgo;
 import 'post_view_screen.dart';
 import 'user_profile_screen.dart';
@@ -47,17 +48,29 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     }
   }
 
-  String _text(Map<String, dynamic> n) {
-    final actor =
-        (n['actor'] as Map<String, dynamic>?)?['username'] as String? ??
-            'Кто-то';
-    return switch (n['type']) {
-      'friend_request' => '$actor подал(а) заявку в друзья',
-      'friend_accept' => '$actor принял(а) вашу заявку в друзья',
-      'like' => '$actor лайкнул(а) ваш пост',
-      'comment' => '$actor прокомментировал(а) ваш пост',
-      _ => 'Новое уведомление',
+  String _eventText(String? type) {
+    return switch (type) {
+      'like' => 'оценил(а) ваш пост ❤️',
+      'comment_like' => 'оценил(а) ваш комментарий ❤️',
+      'comment' => 'прокомментировал(а) ваш пост',
+      'friend_request' => 'хочет добавить вас в друзья',
+      'friend_accept' => 'принял(а) заявку в друзья',
+      'message' => 'написал(а) вам сообщение',
+      _ => 'новое событие',
     };
+  }
+
+  Future<void> _markAllRead() async {
+    setState(() {
+      for (final n in _items ?? []) {
+        n['read'] = true;
+      }
+    });
+    try {
+      await _client
+          .from('notifications')
+          .update({'read': true}).eq('user_id', _uid).eq('read', false);
+    } catch (_) {}
   }
 
   Future<void> _open(Map<String, dynamic> n) async {
@@ -73,19 +86,34 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     if (!mounted) return;
 
     final type = n['type'] as String?;
+    final actor = n['actor'] as Map<String, dynamic>?;
+    final actorId = n['actor_id'] as String?;
+    final actorName = actor?['username'] as String? ?? 'без имени';
+    final actorAvatar = actor?['avatar_url'] as String?;
+
+    if (type == 'message') {
+      if (actorId == null) return;
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => ChatScreen(
+            peerId: actorId,
+            peerName: actorName,
+            peerAvatar: actorAvatar,
+          ),
+        ),
+      );
+      return;
+    }
+
     if (type == 'friend_request' || type == 'friend_accept') {
-      final actorId = n['actor_id'] as String?;
-      // actor_id нет в select — берём из связанного профиля через запрос.
-      if (actorId == null) {
-        _openActorByUsername(n);
-        return;
-      }
+      if (actorId == null) return;
       Navigator.of(context).push(
         MaterialPageRoute(builder: (_) => UserProfileScreen(userId: actorId)),
       );
       return;
     }
 
+    // like / comment_like / comment — ведём на пост.
     final postId = n['post_id'] as String?;
     if (postId != null) {
       try {
@@ -114,37 +142,26 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     }
   }
 
-  Future<void> _openActorByUsername(Map<String, dynamic> n) async {
-    final username =
-        (n['actor'] as Map<String, dynamic>?)?['username'] as String?;
-    if (username == null) return;
-    try {
-      final profile = await _client
-          .from('profiles')
-          .select('id')
-          .eq('username', username)
-          .maybeSingle();
-      if (!mounted || profile == null) return;
-      Navigator.of(context).push(
-        MaterialPageRoute(
-          builder: (_) => UserProfileScreen(userId: profile['id'] as String),
-        ),
-      );
-    } catch (_) {}
-  }
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
     final muted = theme.textTheme.bodyMedium?.color?.withValues(alpha: 0.55);
+    final hasUnread = (_items ?? []).any((n) => n['read'] != true);
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Уведомления'),
+        title: const Text('Активность'),
         centerTitle: true,
         backgroundColor: theme.scaffoldBackgroundColor,
         elevation: 0,
+        actions: [
+          if (hasUnread)
+            TextButton(
+              onPressed: _markAllRead,
+              child: const Text('Прочитать все'),
+            ),
+        ],
       ),
       body: _buildBody(isDark, muted),
     );
@@ -188,9 +205,12 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
           final n = items[i];
           final actor = n['actor'] as Map<String, dynamic>?;
           final avatarUrl = actor?['avatar_url'] as String?;
+          final actorName = actor?['username'] as String? ?? 'Кто-то';
           final unread = n['read'] != true;
           final createdAt =
               DateTime.tryParse(n['created_at'] as String? ?? '');
+          final baseColor =
+              Theme.of(context).textTheme.bodyMedium?.color;
 
           return Container(
             color: unread
@@ -208,15 +228,31 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                         size: 20, color: AppColors.coral)
                     : null,
               ),
-              title: Text(
-                _text(n),
-                style: TextStyle(
-                    fontWeight: unread ? FontWeight.w600 : FontWeight.normal),
+              title: RichText(
+                text: TextSpan(
+                  style: TextStyle(
+                    fontSize: 14.5,
+                    color: baseColor,
+                    fontWeight:
+                        unread ? FontWeight.w600 : FontWeight.normal,
+                  ),
+                  children: [
+                    TextSpan(
+                      text: actorName,
+                      style: const TextStyle(
+                        color: AppColors.coral,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    TextSpan(text: ' ${_eventText(n['type'] as String?)}'),
+                  ],
+                ),
               ),
               subtitle:
                   createdAt != null ? Text(timeAgo(createdAt)) : null,
               trailing: unread
-                  ? const CircleAvatar(radius: 4, backgroundColor: AppColors.coral)
+                  ? const CircleAvatar(
+                      radius: 4, backgroundColor: AppColors.coral)
                   : null,
             ),
           );

@@ -5,6 +5,8 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'app_theme.dart';
 import 'auth_gate.dart';
 import 'login_screen.dart';
+import 'messages_screen.dart';
+import 'presence.dart';
 import 'settings.dart';
 import 'supabase_config.dart';
 
@@ -18,6 +20,8 @@ Future<void> main() async {
     publishableKey: SupabaseConfig.publishableKey,
   );
   await AppSettings.load();
+  PresenceService.instance.start();
+  MessagesBadgeService.instance.start();
 
   // Splash — минимум 2 секунды или до готовности.
   final elapsed = DateTime.now().difference(startedAt);
